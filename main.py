@@ -289,6 +289,32 @@ class TradingSystem:
         self.avoid_bad_timing = True
         self.market_reversal_detection = True
         self.hg_performance_history = []
+        
+        # 📊 System Health Monitoring & Enhanced Debugging
+        self.system_health_enabled = True
+        self.health_check_interval = 300  # 5 minutes
+        self.last_health_check = None
+        self.system_alerts = []
+        self.max_alerts = 50  # Keep last 50 alerts
+        
+        # Performance metrics
+        self.performance_metrics = {
+            'average_execution_time': 0.0,
+            'execution_times': [],
+            'error_rate': 0.0,
+            'recent_errors': [],
+            'uptime_start': datetime.now(),
+            'cycles_completed': 0,
+            'successful_operations': 0,
+            'failed_operations': 0
+        }
+        
+        # Debug settings
+        self.debug_mode = False
+        self.verbose_logging = False
+        self.log_market_data = False
+        self.log_memory_usage = False
+        self.hg_performance_history = []
         self.hg_success_patterns = {}
         self.hg_failure_analysis = {}
         
@@ -2449,19 +2475,36 @@ class TradingSystem:
             return {}
 
     def trading_loop(self):
-        """Main trading loop with auto-save and connection monitoring"""
-        self.log("🧠 Smart Trading System Started with State Management")
+        """Main trading loop with comprehensive monitoring and health checks"""
+        self.log("🧠 Smart Trading System Started with Enhanced Monitoring")
         last_save_time = datetime.now()
         last_connection_check = datetime.now()
         last_memory_management = datetime.now()
+        last_health_check = datetime.now()
+        cycle_start_time = datetime.now()
         
         while self.trading_active:
+            cycle_start = datetime.now()
+            cycle_success = True
+            
             try:
+                # 🏥 System Health Check (every 5 minutes)
+                if (datetime.now() - last_health_check).seconds >= self.health_check_interval:
+                    try:
+                        if self.system_health_enabled:
+                            health_report = self.perform_system_health_check()
+                            if health_report['overall_status'] == 'CRITICAL':
+                                self.log("🚨 Critical system health issues detected", "ERROR")
+                            last_health_check = datetime.now()
+                    except Exception as health_error:
+                        self.log(f"Health check error: {str(health_error)}", "ERROR")
+                
                 # 🔗 Connection Health Check
                 if (datetime.now() - last_connection_check).seconds >= self.connection_check_interval:
                     if not self.check_mt5_connection_health():
                         if not self.attempt_mt5_reconnection():
                             self.log("⚠️ MT5 connection unhealthy, skipping cycle", "WARNING")
+                            cycle_success = False
                             time.sleep(10)
                             continue
                     last_connection_check = datetime.now()
@@ -2469,23 +2512,35 @@ class TradingSystem:
                 if not self.mt5_connected:
                     self.log("⚠️ MT5 not connected, attempting reconnection...", "WARNING")
                     if not self.attempt_mt5_reconnection():
+                        cycle_success = False
                         time.sleep(5)
                         continue
                 
                 # 🧹 Memory Management (every 30 minutes)
                 if (datetime.now() - last_memory_management).seconds >= 1800:  # 30 minutes
                     try:
+                        if self.log_memory_usage:
+                            memory_before = self.get_memory_status()
+                            self.log(f"Memory before cleanup: {memory_before.get('memory_health', {}).get('process_memory_mb', 'N/A')}MB")
+                        
                         self.perform_memory_management()
                         last_memory_management = datetime.now()
+                        
+                        if self.log_memory_usage:
+                            memory_after = self.get_memory_status()
+                            self.log(f"Memory after cleanup: {memory_after.get('memory_health', {}).get('process_memory_mb', 'N/A')}MB")
                     except Exception as mem_error:
                         self.log(f"Memory management error: {str(mem_error)}", "ERROR")
+                        cycle_success = False
                 
                 # Update positions with error handling
                 try:
                     self.update_positions()
-                    self.log(f"📊 Updated positions: {len(self.positions)} active")
+                    if self.verbose_logging:
+                        self.log(f"📊 Updated positions: {len(self.positions)} active")
                 except Exception as e:
                     self.log(f"Error updating positions: {str(e)}", "ERROR")
+                    cycle_success = False
                     continue
                 
                 # Smart Position Management (ทุก 30 วินาที)
@@ -2494,54 +2549,74 @@ class TradingSystem:
                     try:
                         self.smart_position_management()
                         self.last_efficiency_check = datetime.now()
-                        self.log("🧠 Smart position management executed")
+                        if self.verbose_logging:
+                            self.log("🧠 Smart position management executed")
                     except Exception as e:
                         self.log(f"Error in position management: {str(e)}", "ERROR")
+                        cycle_success = False
                 
                 # Market analysis and signal processing
-                self.log("📈 Getting market data...")
+                if self.verbose_logging:
+                    self.log("📈 Getting market data...")
                 market_data = self.get_market_data()
                 
                 if (market_data is not None):
-                    self.log(f"✅ Market data received: {len(market_data)} candles")
+                    if self.log_market_data:
+                        self.log(f"✅ Market data received: {len(market_data)} candles")
                     
                     try:
                         signal = self.analyze_mini_trend(market_data)
                         
                         if signal:
                             self.log(f"🚨 SIGNAL FOUND: {signal.direction} strength {signal.strength:.1f}")
-                            self.log(f"   Reason: {signal.reason}")
+                            if self.debug_mode:
+                                self.log(f"   Reason: {signal.reason}")
+                                self.log(f"   Price: {signal.price}")
                             
                             if self.can_trade():
-                                self.log(f"✅ Trade conditions OK, executing order...")
+                                if self.verbose_logging:
+                                    self.log(f"✅ Trade conditions OK, executing order...")
+                                    
+                                order_start_time = datetime.now()
                                 success = self.execute_order(signal)  # ใช้ smart router
+                                order_execution_time = (datetime.now() - order_start_time).total_seconds()
+                                
                                 if success:
                                     self.successful_signals += 1
-                                    self.log(f"🎯 Order execution successful!")
+                                    self.log(f"🎯 Order execution successful! (took {order_execution_time:.2f}s)")
+                                    if self.debug_mode:
+                                        self.log(f"   Signal processed: {signal.direction} at {signal.price}")
                                 else:
-                                    self.log(f"❌ Order execution failed")
+                                    self.log(f"❌ Order execution failed (took {order_execution_time:.2f}s)")
+                                    cycle_success = False
                             else:
-                                self.log(f"⏸️ Cannot trade - checking conditions...")
-                                # Debug why can't trade
-                                self.debug_trade_conditions()
+                                if self.debug_mode:
+                                    self.log(f"⏸️ Cannot trade - checking conditions...")
+                                    # Debug why can't trade
+                                    self.debug_trade_conditions()
                         else:
-                            self.log("📊 No signal detected in current market data")
-                            # Debug market conditions
-                            self.debug_market_conditions(market_data)
+                            if self.verbose_logging:
+                                self.log("📊 No signal detected in current market data")
+                            # Debug market conditions only in debug mode
+                            if self.debug_mode:
+                                self.debug_market_conditions(market_data)
                     except Exception as e:
                         self.log(f"Error in signal analysis: {str(e)}", "ERROR")
+                        cycle_success = False
                 else:
                     self.log("❌ No market data received", "WARNING")
+                    cycle_success = False
                 
                 # Memory management - cleanup old signals
                 try:
                     hour_ago = datetime.now() - timedelta(hours=1)
                     old_count = len(self.hourly_signals)
                     self.hourly_signals = [s for s in self.hourly_signals if s > hour_ago]
-                    if old_count != len(self.hourly_signals):
+                    if old_count != len(self.hourly_signals) and self.verbose_logging:
                         self.log(f"🧹 Cleaned up {old_count - len(self.hourly_signals)} old signals")
                 except Exception as e:
                     self.log(f"Error cleaning signals: {str(e)}", "ERROR")
+                    cycle_success = False
                 
                 # Auto-save ทุก 5 นาที
                 if (datetime.now() - last_save_time).seconds >= 300:  # 5 minutes
@@ -2550,22 +2625,32 @@ class TradingSystem:
                         last_save_time = datetime.now()
                     except Exception as e:
                         self.log(f"Error in auto-save: {str(e)}", "ERROR")
+                        cycle_success = False
                 
                 time.sleep(5)  # 5-second cycle
                 
             except Exception as e:
                 self.log(f"Error in trading loop: {str(e)}", "ERROR")
+                cycle_success = False
+                
                 # Emergency recovery
                 try:
                     self.emergency_state_recovery()
                 except Exception as recovery_error:
                     self.log(f"Emergency recovery failed: {str(recovery_error)}", "ERROR")
                 time.sleep(10)
+            
+            finally:
+                # Update performance metrics
+                cycle_time = (datetime.now() - cycle_start).total_seconds()
+                self.update_performance_metrics(cycle_success, cycle_time)
         
         # Save state เมื่อหยุด trading
         try:
             self.save_trading_state()
-            self.log("🛑 Smart Trading System Stopped - State Saved")
+            final_uptime = (datetime.now() - cycle_start_time).total_seconds()
+            self.log(f"🛑 Smart Trading System Stopped - Uptime: {final_uptime/3600:.1f} hours")
+            self.log(f"📊 Final Stats: {self.performance_metrics['cycles_completed']} cycles, {self.performance_metrics['error_rate']:.1f}% error rate")
         except Exception as e:
             self.log(f"Error saving final state: {str(e)}", "ERROR")
 
@@ -4314,6 +4399,248 @@ class TradingSystem:
             
         except Exception as e:
             self.log(f"Error validating data structures: {str(e)}", "ERROR")
+    
+    def perform_system_health_check(self) -> dict:
+        """🏥 Comprehensive system health monitoring"""
+        try:
+            health_report = {
+                'timestamp': datetime.now().isoformat(),
+                'overall_status': 'HEALTHY',
+                'alerts': [],
+                'warnings': [],
+                'metrics': {}
+            }
+            
+            # 1. Connection Health
+            connection_health = {
+                'mt5_connected': self.mt5_connected,
+                'circuit_breaker_open': self.circuit_breaker_open,
+                'connection_failures': self.connection_failures,
+                'last_ping_success': self.last_mt5_ping is not None
+            }
+            
+            if not self.mt5_connected:
+                health_report['alerts'].append("MT5 not connected")
+                health_report['overall_status'] = 'CRITICAL'
+            elif self.circuit_breaker_open:
+                health_report['alerts'].append("Circuit breaker is open")
+                health_report['overall_status'] = 'WARNING'
+            elif self.connection_failures > 0:
+                health_report['warnings'].append(f"Recent connection failures: {self.connection_failures}")
+            
+            # 2. Memory Health
+            memory_status = self.get_memory_status()
+            if 'memory_health' in memory_status:
+                memory_health = memory_status['memory_health']
+                if memory_health.get('memory_pressure') == 'HIGH':
+                    health_report['alerts'].append("High memory usage detected")
+                    if health_report['overall_status'] == 'HEALTHY':
+                        health_report['overall_status'] = 'WARNING'
+                elif memory_health.get('memory_pressure') == 'MEDIUM':
+                    health_report['warnings'].append("Medium memory usage")
+            
+            # 3. Performance Metrics
+            uptime_seconds = (datetime.now() - self.performance_metrics['uptime_start']).total_seconds()
+            cycles_per_hour = (self.performance_metrics['cycles_completed'] / max(1, uptime_seconds)) * 3600
+            
+            error_rate = 0
+            if self.performance_metrics['successful_operations'] + self.performance_metrics['failed_operations'] > 0:
+                total_ops = self.performance_metrics['successful_operations'] + self.performance_metrics['failed_operations']
+                error_rate = (self.performance_metrics['failed_operations'] / total_ops) * 100
+            
+            performance_health = {
+                'uptime_hours': uptime_seconds / 3600,
+                'cycles_completed': self.performance_metrics['cycles_completed'],
+                'cycles_per_hour': cycles_per_hour,
+                'error_rate_percent': error_rate,
+                'avg_execution_time': self.performance_metrics.get('average_execution_time', 0)
+            }
+            
+            if error_rate > 20:  # More than 20% error rate
+                health_report['alerts'].append(f"High error rate: {error_rate:.1f}%")
+                health_report['overall_status'] = 'CRITICAL'
+            elif error_rate > 10:  # More than 10% error rate
+                health_report['warnings'].append(f"Elevated error rate: {error_rate:.1f}%")
+                if health_report['overall_status'] == 'HEALTHY':
+                    health_report['overall_status'] = 'WARNING'
+            
+            # 4. Trading Health
+            trading_health = {
+                'trading_active': self.trading_active,
+                'active_positions': len(self.positions) if hasattr(self, 'positions') else 0,
+                'daily_trades': self.daily_trades,
+                'success_rate': 0
+            }
+            
+            if self.total_signals > 0:
+                trading_health['success_rate'] = (self.successful_signals / self.total_signals) * 100
+            
+            if self.trading_active and trading_health['success_rate'] < 30:  # Less than 30% success
+                health_report['warnings'].append(f"Low trading success rate: {trading_health['success_rate']:.1f}%")
+                if health_report['overall_status'] == 'HEALTHY':
+                    health_report['overall_status'] = 'WARNING'
+            
+            # 5. Data Integrity Health
+            data_health = {
+                'position_trackers': len(self.position_tracker) if hasattr(self, 'position_tracker') else 0,
+                'state_file_exists': os.path.exists(self.state_file),
+                'backup_file_exists': os.path.exists(getattr(self, 'positions_file', '')),
+                'recent_save_success': True  # We'll track this
+            }
+            
+            if not data_health['state_file_exists']:
+                health_report['warnings'].append("No state file found")
+            
+            # Compile final report
+            health_report['metrics'] = {
+                'connection': connection_health,
+                'performance': performance_health,
+                'trading': trading_health,
+                'data': data_health
+            }
+            
+            # Add to alerts history
+            if health_report['alerts'] or health_report['warnings']:
+                alert_entry = {
+                    'timestamp': datetime.now().isoformat(),
+                    'status': health_report['overall_status'],
+                    'alerts': health_report['alerts'].copy(),
+                    'warnings': health_report['warnings'].copy()
+                }
+                self.system_alerts.append(alert_entry)
+                
+                # Keep only recent alerts
+                if len(self.system_alerts) > self.max_alerts:
+                    self.system_alerts = self.system_alerts[-self.max_alerts:]
+            
+            # Log health status
+            if health_report['overall_status'] == 'CRITICAL':
+                self.log(f"🚨 SYSTEM HEALTH: CRITICAL - {', '.join(health_report['alerts'])}", "ERROR")
+            elif health_report['overall_status'] == 'WARNING':
+                self.log(f"⚠️ SYSTEM HEALTH: WARNING - {', '.join(health_report['warnings'])}", "WARNING")
+            elif self.verbose_logging:
+                self.log("✅ System health check: All systems normal", "INFO")
+            
+            self.last_health_check = datetime.now()
+            return health_report
+            
+        except Exception as e:
+            self.log(f"Error in system health check: {str(e)}", "ERROR")
+            return {
+                'timestamp': datetime.now().isoformat(),
+                'overall_status': 'ERROR',
+                'alerts': [f"Health check failed: {str(e)}"],
+                'metrics': {}
+            }
+    
+    def update_performance_metrics(self, operation_success: bool, execution_time: float = None):
+        """Update performance tracking metrics"""
+        try:
+            self.performance_metrics['cycles_completed'] += 1
+            
+            if operation_success:
+                self.performance_metrics['successful_operations'] += 1
+            else:
+                self.performance_metrics['failed_operations'] += 1
+                # Track recent errors
+                error_entry = {
+                    'timestamp': datetime.now().isoformat(),
+                    'cycle': self.performance_metrics['cycles_completed']
+                }
+                self.performance_metrics['recent_errors'].append(error_entry)
+                
+                # Keep only last 100 errors
+                if len(self.performance_metrics['recent_errors']) > 100:
+                    self.performance_metrics['recent_errors'] = self.performance_metrics['recent_errors'][-100:]
+            
+            # Track execution times
+            if execution_time is not None:
+                self.performance_metrics['execution_times'].append(execution_time)
+                
+                # Keep only last 1000 execution times
+                if len(self.performance_metrics['execution_times']) > 1000:
+                    self.performance_metrics['execution_times'] = self.performance_metrics['execution_times'][-1000:]
+                
+                # Update average
+                if self.performance_metrics['execution_times']:
+                    self.performance_metrics['average_execution_time'] = sum(self.performance_metrics['execution_times']) / len(self.performance_metrics['execution_times'])
+            
+            # Update error rate
+            total_ops = self.performance_metrics['successful_operations'] + self.performance_metrics['failed_operations']
+            if total_ops > 0:
+                self.performance_metrics['error_rate'] = (self.performance_metrics['failed_operations'] / total_ops) * 100
+            
+        except Exception as e:
+            self.log(f"Error updating performance metrics: {str(e)}", "ERROR")
+    
+    def get_system_diagnostics(self) -> dict:
+        """🔍 Get comprehensive system diagnostics"""
+        try:
+            diagnostics = {
+                'timestamp': datetime.now().isoformat(),
+                'system_info': {},
+                'trading_info': {},
+                'memory_info': {},
+                'connection_info': {},
+                'recent_alerts': self.system_alerts[-10:] if self.system_alerts else [],
+                'performance_summary': {}
+            }
+            
+            # System information
+            try:
+                import platform
+                diagnostics['system_info'] = {
+                    'platform': platform.platform(),
+                    'python_version': platform.python_version(),
+                    'architecture': platform.architecture()[0]
+                }
+            except:
+                diagnostics['system_info'] = {'error': 'Could not retrieve system info'}
+            
+            # Trading information
+            diagnostics['trading_info'] = {
+                'trading_active': self.trading_active,
+                'mt5_connected': self.mt5_connected,
+                'symbol': self.symbol,
+                'base_lot': self.base_lot,
+                'active_positions': len(self.positions) if hasattr(self, 'positions') else 0,
+                'daily_trades': self.daily_trades,
+                'total_signals': self.total_signals,
+                'successful_signals': self.successful_signals,
+                'success_rate': (self.successful_signals / max(1, self.total_signals)) * 100
+            }
+            
+            # Memory information
+            diagnostics['memory_info'] = self.get_memory_status()
+            
+            # Connection information
+            diagnostics['connection_info'] = {
+                'mt5_connected': self.mt5_connected,
+                'circuit_breaker_open': self.circuit_breaker_open,
+                'connection_failures': self.connection_failures,
+                'last_ping': self.last_mt5_ping.isoformat() if self.last_mt5_ping else None,
+                'last_health_check': self.last_health_check.isoformat() if self.last_health_check else None
+            }
+            
+            # Performance summary
+            uptime_seconds = (datetime.now() - self.performance_metrics['uptime_start']).total_seconds()
+            diagnostics['performance_summary'] = {
+                'uptime_hours': uptime_seconds / 3600,
+                'cycles_completed': self.performance_metrics['cycles_completed'],
+                'error_rate': self.performance_metrics['error_rate'],
+                'average_execution_time': self.performance_metrics['average_execution_time'],
+                'successful_operations': self.performance_metrics['successful_operations'],
+                'failed_operations': self.performance_metrics['failed_operations']
+            }
+            
+            return diagnostics
+            
+        except Exception as e:
+            self.log(f"Error getting diagnostics: {str(e)}", "ERROR")
+            return {
+                'timestamp': datetime.now().isoformat(),
+                'error': str(e)
+            }
 
     def emergency_state_recovery(self):
         """🚨 กู้คืนสถานะฉุกเฉิน"""
