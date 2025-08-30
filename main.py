@@ -19,6 +19,69 @@ import pickle
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+class ValidationError(Exception):
+    """Custom validation error"""
+    pass
+
+class InputValidator:
+    """Input validation utility class"""
+    
+    @staticmethod
+    def validate_volume(volume: float, min_volume: float = 0.01, max_volume: float = 100.0) -> float:
+        """Validate trading volume"""
+        if not isinstance(volume, (int, float)):
+            raise ValidationError(f"Volume must be numeric, got {type(volume)}")
+        
+        volume = float(volume)
+        if volume <= 0:
+            raise ValidationError(f"Volume must be positive, got {volume}")
+        if volume < min_volume:
+            raise ValidationError(f"Volume {volume} below minimum {min_volume}")
+        if volume > max_volume:
+            raise ValidationError(f"Volume {volume} exceeds maximum {max_volume}")
+        
+        return volume
+    
+    @staticmethod
+    def validate_symbol(symbol: str) -> str:
+        """Validate trading symbol"""
+        if not isinstance(symbol, str):
+            raise ValidationError(f"Symbol must be string, got {type(symbol)}")
+        
+        symbol = symbol.strip().upper()
+        if not symbol:
+            raise ValidationError("Symbol cannot be empty")
+        if len(symbol) < 3 or len(symbol) > 20:
+            raise ValidationError(f"Symbol length must be 3-20 characters, got {len(symbol)}")
+        
+        return symbol
+    
+    @staticmethod
+    def validate_price(price: float, min_price: float = 0.0001) -> float:
+        """Validate price values"""
+        if not isinstance(price, (int, float)):
+            raise ValidationError(f"Price must be numeric, got {type(price)}")
+        
+        price = float(price)
+        if price <= 0:
+            raise ValidationError(f"Price must be positive, got {price}")
+        if price < min_price:
+            raise ValidationError(f"Price {price} below minimum {min_price}")
+        
+        return price
+    
+    @staticmethod
+    def validate_signal_direction(direction: str) -> str:
+        """Validate signal direction"""
+        if not isinstance(direction, str):
+            raise ValidationError(f"Direction must be string, got {type(direction)}")
+        
+        direction = direction.strip().upper()
+        if direction not in ['BUY', 'SELL']:
+            raise ValidationError(f"Direction must be 'BUY' or 'SELL', got '{direction}'")
+        
+        return direction
+
 @dataclass
 class Signal:
     """Signal data structure"""
@@ -112,6 +175,17 @@ class TradingSystem:
             mt5.ORDER_FILLING_FOK,  # Fill or Kill  
             mt5.ORDER_FILLING_RETURN  # Return (default)
         ]
+        
+        # 🔗 Connection Health Monitoring & Circuit Breakers
+        self.last_mt5_ping = None
+        self.connection_failures = 0
+        self.max_connection_failures = 5
+        self.connection_check_interval = 30  # seconds
+        self.circuit_breaker_enabled = True
+        self.circuit_breaker_threshold = 3  # failures before breaking
+        self.circuit_breaker_timeout = 300  # 5 minutes before retry
+        self.circuit_breaker_open = False
+        self.circuit_breaker_last_failure = None
 
         # 🛡️ Anti-Exposure Protection System
         self.anti_exposure_enabled = True
@@ -269,31 +343,164 @@ class TradingSystem:
             self.log(f"Error detecting filling type: {str(e)}", "ERROR")
             return mt5.ORDER_FILLING_IOC
 
-    def connect_mt5(self) -> bool:
-        """Connect to MetaTrader 5"""
+    def connect_mt5(self, max_retries: int = 3, retry_delay: float = 2.0) -> bool:
+        """Connect to MetaTrader 5 with retry mechanism and validation"""
+        for attempt in range(max_retries):
+            try:
+                # Validate inputs
+                if max_retries < 1:
+                    raise ValidationError("max_retries must be at least 1")
+                if retry_delay < 0:
+                    raise ValidationError("retry_delay cannot be negative")
+                
+                self.log(f"MT5 connection attempt {attempt + 1}/{max_retries}")
+                
+                # Initialize MT5
+                if not mt5.initialize():
+                    error_code = mt5.last_error()
+                    self.log(f"MT5 initialization failed: {error_code}", "ERROR")
+                    if attempt < max_retries - 1:
+                        self.log(f"Retrying in {retry_delay} seconds...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 1.5  # Exponential backoff
+                        continue
+                    return False
+                
+                # Validate connection with account info
+                account_info = mt5.account_info()
+                if account_info is None:
+                    error_code = mt5.last_error()
+                    self.log(f"Failed to get account info: {error_code}", "ERROR")
+                    mt5.shutdown()
+                    if attempt < max_retries - 1:
+                        self.log(f"Retrying in {retry_delay} seconds...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 1.5
+                        continue
+                    return False
+                
+                # Validate account state
+                if account_info.trade_allowed is False:
+                    self.log("Trading is not allowed on this account", "ERROR")
+                    mt5.shutdown()
+                    return False
+                
+                # Connection successful
+                self.mt5_connected = True
+                
+                # Auto-detect filling type after connection
+                try:
+                    self.filling_type = self.detect_broker_filling_type()
+                except Exception as e:
+                    self.log(f"Warning: Could not detect filling type: {e}", "WARNING")
+                    self.filling_type = mt5.ORDER_FILLING_IOC  # Safe default
+                
+                self.log(f"✅ Connected to MT5 - Account: {account_info.login}")
+                self.log(f"Balance: ${account_info.balance:.2f}, Equity: ${account_info.equity:.2f}")
+                self.log(f"Trade allowed: {account_info.trade_allowed}")
+                
+                # Initialize connection health tracking
+                self.last_mt5_ping = datetime.now()
+                self.connection_failures = 0
+                
+                return True
+                
+            except ValidationError as e:
+                self.log(f"Validation error in MT5 connection: {e}", "ERROR")
+                return False
+            except Exception as e:
+                self.log(f"MT5 connection error (attempt {attempt + 1}): {str(e)}", "ERROR")
+                if attempt < max_retries - 1:
+                    self.log(f"Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 1.5
+                    continue
+                
+        self.log("All MT5 connection attempts failed", "ERROR")
+        return False
+    
+    def check_mt5_connection_health(self) -> bool:
+        """Check MT5 connection health with circuit breaker logic"""
         try:
-            if not mt5.initialize():
-                self.log("MT5 initialization failed", "ERROR")
+            # If circuit breaker is open, check if timeout has passed
+            if self.circuit_breaker_open:
+                if (self.circuit_breaker_last_failure and 
+                    (datetime.now() - self.circuit_breaker_last_failure).seconds >= self.circuit_breaker_timeout):
+                    self.log("🔄 Circuit breaker timeout elapsed, attempting to close", "INFO")
+                    self.circuit_breaker_open = False
+                    self.connection_failures = 0
+                else:
+                    return False
+            
+            # Quick connection health check
+            if not self.mt5_connected:
                 return False
             
-            # Get account info
+            # Ping MT5 by getting basic info
             account_info = mt5.account_info()
             if account_info is None:
-                self.log("Failed to get account info", "ERROR")
+                self.log("MT5 health check failed - no account info", "WARNING")
+                self._handle_connection_failure()
                 return False
             
-            self.mt5_connected = True
+            # Additional health checks
+            terminal_info = mt5.terminal_info()
+            if terminal_info is None:
+                self.log("MT5 health check failed - no terminal info", "WARNING")
+                self._handle_connection_failure()
+                return False
             
-            # Auto-detect filling type after connection
-            self.filling_type = self.detect_broker_filling_type()
+            if not terminal_info.connected:
+                self.log("MT5 terminal not connected to trade server", "WARNING")
+                self._handle_connection_failure()
+                return False
             
-            self.log(f"Connected to MT5 - Account: {account_info.login}")
-            self.log(f"Balance: ${account_info.balance:.2f}, Equity: ${account_info.equity:.2f}")
+            # Health check passed
+            self.last_mt5_ping = datetime.now()
+            self.connection_failures = 0
             return True
             
         except Exception as e:
-            self.log(f"MT5 connection error: {str(e)}", "ERROR")
+            self.log(f"MT5 health check error: {str(e)}", "ERROR")
+            self._handle_connection_failure()
             return False
+    
+    def _handle_connection_failure(self):
+        """Handle connection failure with circuit breaker logic"""
+        self.connection_failures += 1
+        self.log(f"Connection failure #{self.connection_failures}", "WARNING")
+        
+        if self.circuit_breaker_enabled and self.connection_failures >= self.circuit_breaker_threshold:
+            self.circuit_breaker_open = True
+            self.circuit_breaker_last_failure = datetime.now()
+            self.mt5_connected = False
+            self.log(f"🚨 Circuit breaker OPEN - too many failures ({self.connection_failures})", "ERROR")
+            self.log(f"Will retry after {self.circuit_breaker_timeout} seconds")
+    
+    def attempt_mt5_reconnection(self) -> bool:
+        """Attempt to reconnect to MT5 with circuit breaker protection"""
+        if self.circuit_breaker_open:
+            self.log("Circuit breaker is open, cannot reconnect yet", "WARNING")
+            return False
+        
+        self.log("🔄 Attempting MT5 reconnection...")
+        self.mt5_connected = False
+        
+        # Try to shutdown first in case of partial connection
+        try:
+            mt5.shutdown()
+        except:
+            pass
+        
+        success = self.connect_mt5()
+        if success:
+            self.log("✅ MT5 reconnection successful")
+            self.connection_failures = 0
+        else:
+            self.log("❌ MT5 reconnection failed")
+            self._handle_connection_failure()
+        
+        return success
 
     def disconnect_mt5(self):
         """Disconnect from MetaTrader 5 and save state"""
@@ -1172,11 +1379,40 @@ class TradingSystem:
             return False
 
     def execute_order(self, signal: Signal) -> bool:
-        """Execute order with smart routing"""
-        if not self.can_trade():
-            return False
-            
+        """Execute order with smart routing and comprehensive validation"""
         try:
+            # Input validation
+            if not isinstance(signal, Signal):
+                raise ValidationError(f"Signal must be Signal object, got {type(signal)}")
+            
+            # Validate signal properties
+            signal.direction = InputValidator.validate_signal_direction(signal.direction)
+            signal.price = InputValidator.validate_price(signal.price)
+            
+            if not hasattr(signal, 'strength') or signal.strength is None:
+                signal.strength = 1.0
+            else:
+                signal.strength = self._validate_float(signal.strength, min_val=0.1, max_val=5.0, default=1.0)
+            
+            if not hasattr(signal, 'symbol') or not signal.symbol:
+                signal.symbol = self.symbol
+            else:
+                signal.symbol = InputValidator.validate_symbol(signal.symbol)
+            
+            # System state validation
+            if not self.can_trade():
+                self.log("❌ Trading conditions not met", "WARNING")
+                return False
+            
+            if not self.mt5_connected:
+                self.log("❌ MT5 not connected", "ERROR")
+                return False
+            
+            # Circuit breaker check
+            if self.circuit_breaker_open:
+                self.log("❌ Circuit breaker is open, cannot execute orders", "WARNING")
+                return False
+                
             # ใช้ Smart Signal Router
             router_result = self.smart_signal_router(signal)
             
@@ -1200,19 +1436,50 @@ class TradingSystem:
             # Execute ปกติ (หรือ fallback จาก redirect ที่ล้มเหลว)
             return self.execute_normal_order(signal)
             
+        except ValidationError as e:
+            self.log(f"Validation error in execute_order: {str(e)}", "ERROR")
+            return False
         except Exception as e:
             self.log(f"Error in execute_order: {str(e)}", "ERROR")
             return False
 
     def execute_normal_order(self, signal: Signal) -> bool:
-        """Execute normal market order"""
+        """Execute normal market order with comprehensive validation"""
         try:
+            # Input validation
+            if not isinstance(signal, Signal):
+                raise ValidationError(f"Signal must be Signal object, got {type(signal)}")
+            
+            # Connection validation
+            if not self.mt5_connected:
+                raise ValidationError("MT5 not connected")
+                
+            if self.circuit_breaker_open:
+                raise ValidationError("Circuit breaker is open")
+            
+            # Calculate and validate lot size
             lot_size = self.calculate_lot_size(signal)
+            lot_size = InputValidator.validate_volume(lot_size)
+            
+            # Validate order type
+            if signal.direction not in ['BUY', 'SELL']:
+                raise ValidationError(f"Invalid signal direction: {signal.direction}")
+                
             order_type = mt5.ORDER_TYPE_BUY if signal.direction == 'BUY' else mt5.ORDER_TYPE_SELL
             
             # Ensure we have a valid filling type
             if self.filling_type is None:
                 self.filling_type = self.detect_broker_filling_type()
+            
+            # Validate symbol
+            symbol_info = mt5.symbol_info(self.symbol)
+            if symbol_info is None:
+                raise ValidationError(f"Symbol {self.symbol} not available")
+            
+            if not symbol_info.visible:
+                self.log(f"Making symbol {self.symbol} visible", "INFO")
+                if not mt5.symbol_select(self.symbol, True):
+                    raise ValidationError(f"Could not select symbol {self.symbol}")
             
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
@@ -1228,38 +1495,107 @@ class TradingSystem:
             
             # Retry mechanism with different filling types if needed
             for attempt in range(3):
-                result = mt5.order_send(request)
-                
-                if result.retcode == mt5.TRADE_RETCODE_DONE:
-                    self.last_signal_time = datetime.now()
-                    self.hourly_signals.append(datetime.now())
-                    self.daily_trades += 1
-                    self.total_signals += 1
+                try:
+                    result = mt5.order_send(request)
                     
-                    self.log(f"✅ Order executed: {signal.direction} {lot_size} lots")
-                    self.log(f"   Reason: {signal.reason}")
-                    return True
+                    if result is None:
+                        self.log(f"❌ Order send returned None (attempt {attempt + 1})", "WARNING")
+                        time.sleep(1)
+                        continue
                     
-                elif result.retcode == mt5.TRADE_RETCODE_INVALID_FILL:
-                    # Try next filling type
-                    current_index = self.filling_types_priority.index(self.filling_type)
-                    if current_index < len(self.filling_types_priority) - 1:
-                        self.filling_type = self.filling_types_priority[current_index + 1]
-                        request["type_filling"] = self.filling_type
-                        self.log(f"🔄 Retrying with different filling type: {self.filling_type}")
+                    if result.retcode == mt5.TRADE_RETCODE_DONE:
+                        self.last_signal_time = datetime.now()
+                        self.hourly_signals.append(datetime.now())
+                        self.daily_trades += 1
+                        self.total_signals += 1
+                        
+                        self.log(f"✅ Order executed: {signal.direction} {lot_size} lots")
+                        self.log(f"   Ticket: {result.order}")
+                        self.log(f"   Reason: {signal.reason}")
+                        return True
+                        
+                    elif result.retcode == mt5.TRADE_RETCODE_INVALID_FILL:
+                        # Try next filling type
+                        try:
+                            current_index = self.filling_types_priority.index(self.filling_type)
+                            if current_index < len(self.filling_types_priority) - 1:
+                                self.filling_type = self.filling_types_priority[current_index + 1]
+                                request["type_filling"] = self.filling_type
+                                self.log(f"🔄 Retrying with different filling type: {self.filling_type}")
+                                continue
+                            else:
+                                self.log(f"❌ All filling types failed: {result.retcode}", "ERROR")
+                                break
+                        except ValueError:
+                            # filling_type not in priority list, use default
+                            self.filling_type = mt5.ORDER_FILLING_IOC
+                            request["type_filling"] = self.filling_type
+                            continue
                     else:
-                        self.log(f"❌ All filling types failed: {result.retcode}", "ERROR")
-                        break
-                else:
-                    self.log(f"❌ Order failed (attempt {attempt + 1}): {result.retcode}", "WARNING")
+                        error_description = self._get_trade_error_description(result.retcode)
+                        self.log(f"❌ Order failed (attempt {attempt + 1}): {result.retcode} - {error_description}", "WARNING")
+                        
+                        # Check if error suggests connection issue
+                        if result.retcode in [mt5.TRADE_RETCODE_NO_CONNECTION, 
+                                            mt5.TRADE_RETCODE_TIMEOUT, 
+                                            mt5.TRADE_RETCODE_TRADE_DISABLED]:
+                            self._handle_connection_failure()
+                            break
+                            
+                        time.sleep(1)
+                        
+                except Exception as inner_e:
+                    self.log(f"Exception during order send (attempt {attempt + 1}): {str(inner_e)}", "ERROR")
                     time.sleep(1)
             
-            self.log("❌ Order execution failed after 3 attempts", "ERROR")
+            self.log("❌ Order execution failed after all attempts", "ERROR")
             return False
             
+        except ValidationError as e:
+            self.log(f"Validation error in execute_normal_order: {str(e)}", "ERROR")
+            return False
         except Exception as e:
             self.log(f"Error executing normal order: {str(e)}", "ERROR")
             return False
+    
+    def _get_trade_error_description(self, retcode: int) -> str:
+        """Get human-readable description of trade error code"""
+        error_descriptions = {
+            mt5.TRADE_RETCODE_REQUOTE: "Requote",
+            mt5.TRADE_RETCODE_REJECT: "Request rejected",
+            mt5.TRADE_RETCODE_CANCEL: "Request canceled",
+            mt5.TRADE_RETCODE_PLACED: "Order placed",
+            mt5.TRADE_RETCODE_DONE: "Request completed",
+            mt5.TRADE_RETCODE_DONE_PARTIAL: "Request partially completed",
+            mt5.TRADE_RETCODE_ERROR: "Common error",
+            mt5.TRADE_RETCODE_TIMEOUT: "Request timeout",
+            mt5.TRADE_RETCODE_INVALID: "Invalid request",
+            mt5.TRADE_RETCODE_INVALID_VOLUME: "Invalid volume",
+            mt5.TRADE_RETCODE_INVALID_PRICE: "Invalid price",
+            mt5.TRADE_RETCODE_INVALID_STOPS: "Invalid stops",
+            mt5.TRADE_RETCODE_TRADE_DISABLED: "Trade disabled",
+            mt5.TRADE_RETCODE_MARKET_CLOSED: "Market closed",
+            mt5.TRADE_RETCODE_NO_MONEY: "No money",
+            mt5.TRADE_RETCODE_PRICE_CHANGED: "Price changed",
+            mt5.TRADE_RETCODE_PRICE_OFF: "Off quotes",
+            mt5.TRADE_RETCODE_INVALID_EXPIRATION: "Invalid expiration",
+            mt5.TRADE_RETCODE_ORDER_CHANGED: "Order changed",
+            mt5.TRADE_RETCODE_TOO_MANY_REQUESTS: "Too many requests",
+            mt5.TRADE_RETCODE_NO_CHANGES: "No changes",
+            mt5.TRADE_RETCODE_SERVER_DISABLES_AT: "Server disables autotrading",
+            mt5.TRADE_RETCODE_CLIENT_DISABLES_AT: "Client disables autotrading",
+            mt5.TRADE_RETCODE_LOCKED: "Request locked",
+            mt5.TRADE_RETCODE_FROZEN: "Order frozen",
+            mt5.TRADE_RETCODE_INVALID_FILL: "Invalid fill",
+            mt5.TRADE_RETCODE_CONNECTION: "No connection",
+            mt5.TRADE_RETCODE_ONLY_REAL: "Only real accounts allowed",
+            mt5.TRADE_RETCODE_LIMIT_ORDERS: "Order limit reached",
+            mt5.TRADE_RETCODE_LIMIT_VOLUME: "Volume limit reached",
+            mt5.TRADE_RETCODE_INVALID_ORDER: "Invalid order",
+            mt5.TRADE_RETCODE_POSITION_CLOSED: "Position closed",
+        }
+        
+        return error_descriptions.get(retcode, f"Unknown error code: {retcode}")
 
     def update_positions(self):
         """Update position data and calculate metrics"""
@@ -1973,17 +2309,108 @@ class TradingSystem:
             return False
 
     def cleanup_closed_positions(self):
-        """ทำความสะอาด tracker"""
+        """ทำความสะอาด tracker with enhanced memory management"""
         try:
             active_tickets = {pos.ticket for pos in self.positions}
-            closed_tickets = [ticket for ticket in self.position_tracker.keys() 
-                            if ticket not in active_tickets]
             
+            # Convert all tracker keys to consistent format for comparison
+            normalized_tracker = {}
+            closed_tickets = []
+            
+            for ticket in list(self.position_tracker.keys()):
+                try:
+                    # Convert ticket to int for comparison
+                    ticket_int = int(ticket)
+                    if ticket_int not in active_tickets:
+                        closed_tickets.append(ticket)
+                    else:
+                        normalized_tracker[ticket_int] = self.position_tracker[ticket]
+                except (ValueError, TypeError):
+                    # Remove invalid ticket entries
+                    closed_tickets.append(ticket)
+                    self.log(f"Removing invalid tracker ticket: {ticket}", "WARNING")
+            
+            # Remove closed position trackers
             for ticket in closed_tickets:
-                del self.position_tracker[ticket]
+                try:
+                    del self.position_tracker[ticket]
+                except KeyError:
+                    pass  # Already removed
+            
+            # Update tracker with normalized keys
+            if len(normalized_tracker) != len(self.position_tracker):
+                self.position_tracker = normalized_tracker
+                
+            if closed_tickets:
+                self.log(f"🧹 Cleaned up {len(closed_tickets)} closed position trackers")
+                
+            # Additional memory cleanup
+            self._cleanup_memory_intensive_data()
                 
         except Exception as e:
             self.log(f"Error cleaning up: {str(e)}", "ERROR")
+    
+    def _cleanup_memory_intensive_data(self):
+        """Clean up memory-intensive data structures"""
+        try:
+            # Limit hourly signals to prevent memory bloat
+            max_hourly_signals = 1000
+            if len(self.hourly_signals) > max_hourly_signals:
+                # Keep only the most recent signals
+                self.hourly_signals = self.hourly_signals[-max_hourly_signals:]
+                self.log(f"🧹 Trimmed hourly signals to {max_hourly_signals} entries")
+            
+            # Clean up old hedge analytics
+            if hasattr(self, 'hedge_analytics') and isinstance(self.hedge_analytics, dict):
+                # Keep only recent hedge analytics (last 24 hours)
+                current_time = datetime.now()
+                old_keys = []
+                
+                for key, analytics in self.hedge_analytics.items():
+                    if isinstance(analytics, dict) and 'timestamp' in analytics:
+                        try:
+                            analytics_time = datetime.fromisoformat(analytics['timestamp'])
+                            if (current_time - analytics_time).days > 1:
+                                old_keys.append(key)
+                        except:
+                            old_keys.append(key)  # Remove invalid entries
+                
+                for key in old_keys:
+                    del self.hedge_analytics[key]
+                
+                if old_keys:
+                    self.log(f"🧹 Cleaned up {len(old_keys)} old hedge analytics")
+            
+            # Clean up position tracker of very old entries
+            if hasattr(self, 'position_tracker'):
+                current_time = datetime.now()
+                old_trackers = []
+                
+                for ticket, tracker in self.position_tracker.items():
+                    if isinstance(tracker, dict) and 'birth_time' in tracker:
+                        try:
+                            birth_time = tracker['birth_time']
+                            if isinstance(birth_time, str):
+                                birth_time = datetime.fromisoformat(birth_time)
+                            
+                            # Remove trackers older than 7 days
+                            if (current_time - birth_time).days > 7:
+                                old_trackers.append(ticket)
+                        except:
+                            # Remove invalid tracker entries
+                            old_trackers.append(ticket)
+                
+                for ticket in old_trackers:
+                    try:
+                        del self.position_tracker[ticket]
+                    except KeyError:
+                        pass
+                
+                if old_trackers:
+                    self.log(f"🧹 Cleaned up {len(old_trackers)} old position trackers")
+                    
+        except Exception as e:
+            self.log(f"Error in memory cleanup: {str(e)}", "ERROR")
 
     def get_smart_management_stats(self) -> dict:
         """สถิติการจัดการแบบชาญฉลาด"""
@@ -2022,27 +2449,54 @@ class TradingSystem:
             return {}
 
     def trading_loop(self):
-        """Main trading loop with auto-save"""
+        """Main trading loop with auto-save and connection monitoring"""
         self.log("🧠 Smart Trading System Started with State Management")
         last_save_time = datetime.now()
+        last_connection_check = datetime.now()
+        last_memory_management = datetime.now()
         
         while self.trading_active:
             try:
-                if not self.mt5_connected:
-                    self.log("⚠️ MT5 not connected, waiting...", "WARNING")
-                    time.sleep(5)
-                    continue
+                # 🔗 Connection Health Check
+                if (datetime.now() - last_connection_check).seconds >= self.connection_check_interval:
+                    if not self.check_mt5_connection_health():
+                        if not self.attempt_mt5_reconnection():
+                            self.log("⚠️ MT5 connection unhealthy, skipping cycle", "WARNING")
+                            time.sleep(10)
+                            continue
+                    last_connection_check = datetime.now()
                 
-                # Update positions
-                self.update_positions()
-                self.log(f"📊 Updated positions: {len(self.positions)} active")
+                if not self.mt5_connected:
+                    self.log("⚠️ MT5 not connected, attempting reconnection...", "WARNING")
+                    if not self.attempt_mt5_reconnection():
+                        time.sleep(5)
+                        continue
+                
+                # 🧹 Memory Management (every 30 minutes)
+                if (datetime.now() - last_memory_management).seconds >= 1800:  # 30 minutes
+                    try:
+                        self.perform_memory_management()
+                        last_memory_management = datetime.now()
+                    except Exception as mem_error:
+                        self.log(f"Memory management error: {str(mem_error)}", "ERROR")
+                
+                # Update positions with error handling
+                try:
+                    self.update_positions()
+                    self.log(f"📊 Updated positions: {len(self.positions)} active")
+                except Exception as e:
+                    self.log(f"Error updating positions: {str(e)}", "ERROR")
+                    continue
                 
                 # Smart Position Management (ทุก 30 วินาที)
                 if (not self.last_efficiency_check or 
                     (datetime.now() - self.last_efficiency_check).seconds >= self.position_efficiency_check_interval):
-                    self.smart_position_management()
-                    self.last_efficiency_check = datetime.now()
-                    self.log("🧠 Smart position management executed")
+                    try:
+                        self.smart_position_management()
+                        self.last_efficiency_check = datetime.now()
+                        self.log("🧠 Smart position management executed")
+                    except Exception as e:
+                        self.log(f"Error in position management: {str(e)}", "ERROR")
                 
                 # Market analysis and signal processing
                 self.log("📈 Getting market data...")
@@ -2050,54 +2504,70 @@ class TradingSystem:
                 
                 if (market_data is not None):
                     self.log(f"✅ Market data received: {len(market_data)} candles")
-                    signal = self.analyze_mini_trend(market_data)
                     
-                    if signal:
-                        self.log(f"🚨 SIGNAL FOUND: {signal.direction} strength {signal.strength:.1f}")
-                        self.log(f"   Reason: {signal.reason}")
+                    try:
+                        signal = self.analyze_mini_trend(market_data)
                         
-                        if self.can_trade():
-                            self.log(f"✅ Trade conditions OK, executing order...")
-                            success = self.execute_order(signal)  # ใช้ smart router
-                            if success:
-                                self.successful_signals += 1
-                                self.log(f"🎯 Order execution successful!")
+                        if signal:
+                            self.log(f"🚨 SIGNAL FOUND: {signal.direction} strength {signal.strength:.1f}")
+                            self.log(f"   Reason: {signal.reason}")
+                            
+                            if self.can_trade():
+                                self.log(f"✅ Trade conditions OK, executing order...")
+                                success = self.execute_order(signal)  # ใช้ smart router
+                                if success:
+                                    self.successful_signals += 1
+                                    self.log(f"🎯 Order execution successful!")
+                                else:
+                                    self.log(f"❌ Order execution failed")
                             else:
-                                self.log(f"❌ Order execution failed")
+                                self.log(f"⏸️ Cannot trade - checking conditions...")
+                                # Debug why can't trade
+                                self.debug_trade_conditions()
                         else:
-                            self.log(f"⏸️ Cannot trade - checking conditions...")
-                            # Debug why can't trade
-                            self.debug_trade_conditions()
-                    else:
-                        self.log("📊 No signal detected in current market data")
-                        # Debug market conditions
-                        self.debug_market_conditions(market_data)
+                            self.log("📊 No signal detected in current market data")
+                            # Debug market conditions
+                            self.debug_market_conditions(market_data)
+                    except Exception as e:
+                        self.log(f"Error in signal analysis: {str(e)}", "ERROR")
                 else:
                     self.log("❌ No market data received", "WARNING")
                 
-                # Cleanup old signals
-                hour_ago = datetime.now() - timedelta(hours=1)
-                old_count = len(self.hourly_signals)
-                self.hourly_signals = [s for s in self.hourly_signals if s > hour_ago]
-                if old_count != len(self.hourly_signals):
-                    self.log(f"🧹 Cleaned up {old_count - len(self.hourly_signals)} old signals")
+                # Memory management - cleanup old signals
+                try:
+                    hour_ago = datetime.now() - timedelta(hours=1)
+                    old_count = len(self.hourly_signals)
+                    self.hourly_signals = [s for s in self.hourly_signals if s > hour_ago]
+                    if old_count != len(self.hourly_signals):
+                        self.log(f"🧹 Cleaned up {old_count - len(self.hourly_signals)} old signals")
+                except Exception as e:
+                    self.log(f"Error cleaning signals: {str(e)}", "ERROR")
                 
                 # Auto-save ทุก 5 นาที
                 if (datetime.now() - last_save_time).seconds >= 300:  # 5 minutes
-                    self.auto_save_state()
-                    last_save_time = datetime.now()
+                    try:
+                        self.auto_save_state()
+                        last_save_time = datetime.now()
+                    except Exception as e:
+                        self.log(f"Error in auto-save: {str(e)}", "ERROR")
                 
                 time.sleep(5)  # 5-second cycle
                 
             except Exception as e:
                 self.log(f"Error in trading loop: {str(e)}", "ERROR")
                 # Emergency recovery
-                self.emergency_state_recovery()
+                try:
+                    self.emergency_state_recovery()
+                except Exception as recovery_error:
+                    self.log(f"Emergency recovery failed: {str(recovery_error)}", "ERROR")
                 time.sleep(10)
         
         # Save state เมื่อหยุด trading
-        self.save_trading_state()
-        self.log("🛑 Smart Trading System Stopped - State Saved")
+        try:
+            self.save_trading_state()
+            self.log("🛑 Smart Trading System Stopped - State Saved")
+        except Exception as e:
+            self.log(f"Error saving final state: {str(e)}", "ERROR")
 
     def debug_trade_conditions(self):
         """Debug why trading is not allowed"""
@@ -3186,124 +3656,265 @@ class TradingSystem:
             return self.hedge_analytics
 
     def save_trading_state(self):
-        """💾 บันทึกสถานะสำคัญของระบบ"""
+        """💾 บันทึกสถานะสำคัญของระบบ with atomic writes and backup"""
+        temp_file = None
+        backup_file = None
+        
         try:
+            # Validate critical data before saving
+            if not hasattr(self, 'position_tracker'):
+                self.position_tracker = {}
+            if not hasattr(self, 'active_hedges'):
+                self.active_hedges = {}
+            if not hasattr(self, 'hedge_pairs'):
+                self.hedge_pairs = {}
+            
             # ข้อมูลที่จะบันทึก
             state_data = {
                 "timestamp": datetime.now().isoformat(),
-                "version": "3.0",
+                "version": "3.1",  # Updated version for robustness
+                "checksum": None,  # Will be calculated
                 
-                # Position tracking
-                "position_tracker": self.position_tracker,
-                "active_hedges": self.active_hedges,
-                "hedge_pairs": self.hedge_pairs,
+                # Position tracking (with validation)
+                "position_tracker": self.position_tracker if isinstance(self.position_tracker, dict) else {},
+                "active_hedges": self.active_hedges if isinstance(self.active_hedges, dict) else {},
+                "hedge_pairs": self.hedge_pairs if isinstance(self.hedge_pairs, dict) else {},
                 
-                # Statistics
-                "daily_trades": self.daily_trades,
-                "total_signals": self.total_signals,
-                "successful_signals": self.successful_signals,
-                "last_signal_time": self.last_signal_time.isoformat() if self.last_signal_time else None,
+                # Statistics (with defaults)
+                "daily_trades": getattr(self, 'daily_trades', 0),
+                "total_signals": getattr(self, 'total_signals', 0),
+                "successful_signals": getattr(self, 'successful_signals', 0),
+                "last_signal_time": self.last_signal_time.isoformat() if getattr(self, 'last_signal_time', None) else None,
                 
                 # Smart router stats
-                "total_redirects": self.total_redirects,
-                "successful_redirects": self.successful_redirects,
-                "redirect_profit_captured": self.redirect_profit_captured,
-                "last_redirect_time": self.last_redirect_time.isoformat() if self.last_redirect_time else None,
+                "total_redirects": getattr(self, 'total_redirects', 0),
+                "successful_redirects": getattr(self, 'successful_redirects', 0),
+                "redirect_profit_captured": getattr(self, 'redirect_profit_captured', 0.0),
+                "last_redirect_time": self.last_redirect_time.isoformat() if getattr(self, 'last_redirect_time', None) else None,
                 
                 # Pair/Group closing stats
-                "total_pair_closes": self.total_pair_closes,
-                "successful_pair_closes": self.successful_pair_closes,
-                "pair_profit_captured": self.pair_profit_captured,
-                "total_group_closes": self.total_group_closes,
-                "group_profit_captured": self.group_profit_captured,
+                "total_pair_closes": getattr(self, 'total_pair_closes', 0),
+                "successful_pair_closes": getattr(self, 'successful_pair_closes', 0),
+                "pair_profit_captured": getattr(self, 'pair_profit_captured', 0.0),
+                "total_group_closes": getattr(self, 'total_group_closes', 0),
+                "group_profit_captured": getattr(self, 'group_profit_captured', 0.0),
                 
                 # Hedge analytics
-                "hedge_analytics": self.hedge_analytics,
+                "hedge_analytics": getattr(self, 'hedge_analytics', {}),
                 
                 # Portfolio info
-                "portfolio_health": self.portfolio_health,
+                "portfolio_health": getattr(self, 'portfolio_health', 100.0),
                 
                 # Settings (สำคัญ)
-                "base_lot": self.base_lot,
-                "smart_router_enabled": self.smart_router_enabled,
-                "pair_closing_enabled": self.pair_closing_enabled,
-                "hedge_system_enabled": self.hedge_system_enabled,
-                "drawdown_management_enabled": self.drawdown_management_enabled
+                "base_lot": getattr(self, 'base_lot', 0.01),
+                "smart_router_enabled": getattr(self, 'smart_router_enabled', True),
+                "pair_closing_enabled": getattr(self, 'pair_closing_enabled', True),
+                "hedge_system_enabled": getattr(self, 'hedge_system_enabled', True),
+                "drawdown_management_enabled": getattr(self, 'drawdown_management_enabled', True)
             }
             
-            # บันทึกเป็น JSON
-            with open(self.state_file, 'w', encoding='utf-8') as f:
+            # Calculate checksum for data integrity
+            import hashlib
+            state_json = json.dumps(state_data, sort_keys=True, ensure_ascii=False)
+            state_data["checksum"] = hashlib.md5(state_json.encode()).hexdigest()
+            
+            # Create backup of existing file
+            if os.path.exists(self.state_file):
+                backup_file = f"{self.state_file}.backup"
+                try:
+                    import shutil
+                    shutil.copy2(self.state_file, backup_file)
+                except Exception as backup_error:
+                    self.log(f"Warning: Could not create backup: {backup_error}", "WARNING")
+            
+            # Atomic write using temporary file
+            temp_file = f"{self.state_file}.tmp"
+            with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(state_data, f, ensure_ascii=False, indent=2)
+                f.flush()  # Ensure data is written to disk
+                os.fsync(f.fileno())  # Force write to disk
+            
+            # Atomic rename (most filesystems guarantee this is atomic)
+            if os.path.exists(temp_file):
+                if os.name == 'nt':  # Windows
+                    if os.path.exists(self.state_file):
+                        os.remove(self.state_file)
+                os.rename(temp_file, self.state_file)
             
             self.log(f"✅ Trading state saved to {self.state_file}")
+            
+            # Clean up old backup
+            if backup_file and os.path.exists(backup_file):
+                try:
+                    # Keep only the most recent backup
+                    old_backup = f"{backup_file}.old"
+                    if os.path.exists(old_backup):
+                        os.remove(old_backup)
+                    os.rename(backup_file, old_backup)
+                except:
+                    pass
+            
             return True
+            
+        except Exception as e:
+            self.log(f"❌ Error saving state: {str(e)}", "ERROR")
+            
+            # Cleanup on error
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
+            
+            # Restore from backup if available
+            if backup_file and os.path.exists(backup_file):
+                try:
+                    import shutil
+                    shutil.copy2(backup_file, self.state_file)
+                    self.log("Restored from backup after save failure", "WARNING")
+                except Exception as restore_error:
+                    self.log(f"Failed to restore from backup: {restore_error}", "ERROR")
+            
+            return False
             
         except Exception as e:
             self.log(f"❌ Error saving state: {str(e)}", "ERROR")
             return False
 
     def load_trading_state(self):
-        """📂 โหลดสถานะที่บันทึกไว้"""
+        """📂 โหลดสถานะที่บันทึกไว้ with validation and recovery"""
+        backup_loaded = False
+        
         try:
+            # Check if main state file exists
             if not os.path.exists(self.state_file):
-                self.log(f"📝 No previous state found ({self.state_file})")
-                return False
+                # Try to load from backup
+                backup_file = f"{self.state_file}.backup"
+                old_backup = f"{backup_file}.old"
+                
+                if os.path.exists(backup_file):
+                    self.log(f"📝 Main state file not found, trying backup: {backup_file}")
+                    return self._load_state_from_file(backup_file)
+                elif os.path.exists(old_backup):
+                    self.log(f"📝 Trying old backup: {old_backup}")
+                    return self._load_state_from_file(old_backup)
+                else:
+                    self.log(f"📝 No previous state found ({self.state_file})")
+                    return False
             
-            with open(self.state_file, 'r', encoding='utf-8') as f:
+            return self._load_state_from_file(self.state_file)
+            
+        except Exception as e:
+            self.log(f"❌ Error loading state: {str(e)}", "ERROR")
+            
+            # Try backup files as fallback
+            for backup_file in [f"{self.state_file}.backup", f"{self.state_file}.backup.old"]:
+                if os.path.exists(backup_file):
+                    try:
+                        self.log(f"🔄 Attempting recovery from {backup_file}")
+                        return self._load_state_from_file(backup_file)
+                    except Exception as backup_error:
+                        self.log(f"❌ Backup recovery failed: {backup_error}", "ERROR")
+                        continue
+            
+            self.log("❌ All recovery attempts failed", "ERROR")
+            return False
+    
+    def _load_state_from_file(self, filename: str) -> bool:
+        """Load state from a specific file with validation"""
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
                 state_data = json.load(f)
             
-            # ตรวจสอบ version
-            if state_data.get("version") != "3.0":
-                self.log("⚠️ Different version detected, loading basic data only", "WARNING")
+            # Validate basic structure
+            if not isinstance(state_data, dict):
+                raise ValidationError("State data is not a dictionary")
             
-            # Restore data
-            self.position_tracker = state_data.get("position_tracker", {})
-            self.active_hedges = state_data.get("active_hedges", {})
-            self.hedge_pairs = state_data.get("hedge_pairs", {})
+            # Check version compatibility
+            version = state_data.get("version", "3.0")
+            if version not in ["3.0", "3.1"]:
+                self.log(f"⚠️ Unsupported version {version}, loading with compatibility mode", "WARNING")
             
-            # Statistics
-            self.daily_trades = state_data.get("daily_trades", 0)
-            self.total_signals = state_data.get("total_signals", 0)
-            self.successful_signals = state_data.get("successful_signals", 0)
+            # Validate checksum if available (version 3.1+)
+            if version == "3.1" and "checksum" in state_data:
+                saved_checksum = state_data.pop("checksum")
+                import hashlib
+                current_json = json.dumps(state_data, sort_keys=True, ensure_ascii=False)
+                current_checksum = hashlib.md5(current_json.encode()).hexdigest()
+                
+                if saved_checksum != current_checksum:
+                    self.log("⚠️ Checksum mismatch - data may be corrupted", "WARNING")
+                    # Continue loading but with caution
             
-            # Parse datetime strings
+            # Restore data with validation
+            self.position_tracker = self._validate_dict(state_data.get("position_tracker", {}))
+            self.active_hedges = self._validate_dict(state_data.get("active_hedges", {}))
+            self.hedge_pairs = self._validate_dict(state_data.get("hedge_pairs", {}))
+            
+            # Statistics with validation
+            self.daily_trades = self._validate_int(state_data.get("daily_trades", 0), min_val=0)
+            self.total_signals = self._validate_int(state_data.get("total_signals", 0), min_val=0)
+            self.successful_signals = self._validate_int(state_data.get("successful_signals", 0), min_val=0)
+            
+            # Parse datetime strings with validation
             if state_data.get("last_signal_time"):
-                self.last_signal_time = datetime.fromisoformat(state_data["last_signal_time"])
+                try:
+                    self.last_signal_time = datetime.fromisoformat(state_data["last_signal_time"])
+                except ValueError as e:
+                    self.log(f"Invalid last_signal_time format: {e}", "WARNING")
+                    self.last_signal_time = None
             
-            # Smart router stats
-            self.total_redirects = state_data.get("total_redirects", 0)
-            self.successful_redirects = state_data.get("successful_redirects", 0)
-            self.redirect_profit_captured = state_data.get("redirect_profit_captured", 0.0)
+            # Smart router stats with validation
+            self.total_redirects = self._validate_int(state_data.get("total_redirects", 0), min_val=0)
+            self.successful_redirects = self._validate_int(state_data.get("successful_redirects", 0), min_val=0)
+            self.redirect_profit_captured = self._validate_float(state_data.get("redirect_profit_captured", 0.0))
             
             if state_data.get("last_redirect_time"):
-                self.last_redirect_time = datetime.fromisoformat(state_data["last_redirect_time"])
+                try:
+                    self.last_redirect_time = datetime.fromisoformat(state_data["last_redirect_time"])
+                except ValueError as e:
+                    self.log(f"Invalid last_redirect_time format: {e}", "WARNING")
+                    self.last_redirect_time = None
             
-            # Pair/Group stats
-            self.total_pair_closes = state_data.get("total_pair_closes", 0)
-            self.successful_pair_closes = state_data.get("successful_pair_closes", 0)
-            self.pair_profit_captured = state_data.get("pair_profit_captured", 0.0)
-            self.total_group_closes = state_data.get("total_group_closes", 0)
-            self.group_profit_captured = state_data.get("group_profit_captured", 0.0)
+            # Pair/Group stats with validation
+            self.total_pair_closes = self._validate_int(state_data.get("total_pair_closes", 0), min_val=0)
+            self.successful_pair_closes = self._validate_int(state_data.get("successful_pair_closes", 0), min_val=0)
+            self.pair_profit_captured = self._validate_float(state_data.get("pair_profit_captured", 0.0))
+            self.total_group_closes = self._validate_int(state_data.get("total_group_closes", 0), min_val=0)
+            self.group_profit_captured = self._validate_float(state_data.get("group_profit_captured", 0.0))
             
-            # Hedge analytics
-            if state_data.get("hedge_analytics"):
-                self.hedge_analytics.update(state_data["hedge_analytics"])
+            # Hedge analytics with validation
+            hedge_analytics = state_data.get("hedge_analytics", {})
+            if isinstance(hedge_analytics, dict):
+                if hasattr(self, 'hedge_analytics'):
+                    self.hedge_analytics.update(hedge_analytics)
+                else:
+                    self.hedge_analytics = hedge_analytics
             
-            # Portfolio
-            self.portfolio_health = state_data.get("portfolio_health", 100.0)
+            # Portfolio with validation
+            self.portfolio_health = self._validate_float(
+                state_data.get("portfolio_health", 100.0), 
+                min_val=0.0, 
+                max_val=200.0
+            )
             
-            # Settings
-            self.base_lot = state_data.get("base_lot", self.base_lot)
-            self.smart_router_enabled = state_data.get("smart_router_enabled", True)
-            self.pair_closing_enabled = state_data.get("pair_closing_enabled", True)
-            self.hedge_system_enabled = state_data.get("hedge_system_enabled", True)
-            self.drawdown_management_enabled = state_data.get("drawdown_management_enabled", True)
+            # Settings with validation
+            self.base_lot = self._validate_float(
+                state_data.get("base_lot", self.base_lot),
+                min_val=0.01,
+                max_val=100.0
+            )
             
-            # แปลง position_tracker datetime strings กลับ
+            self.smart_router_enabled = bool(state_data.get("smart_router_enabled", True))
+            self.pair_closing_enabled = bool(state_data.get("pair_closing_enabled", True))
+            self.hedge_system_enabled = bool(state_data.get("hedge_system_enabled", True))
+            self.drawdown_management_enabled = bool(state_data.get("drawdown_management_enabled", True))
+            
+            # Restore datetime objects in nested structures
             self.restore_position_tracker_datetime()
             
             saved_time = state_data.get("timestamp", "Unknown")
-            self.log(f"✅ Trading state loaded from {saved_time}")
+            self.log(f"✅ Trading state loaded from {saved_time} (file: {filename})")
             self.log(f"📊 Restored: {len(self.position_tracker)} position trackers")
             self.log(f"📊 Restored: {len(self.active_hedges)} hedge groups")
             self.log(f"📊 Stats: {self.total_signals} signals, {self.total_redirects} redirects")
@@ -3311,8 +3922,38 @@ class TradingSystem:
             return True
             
         except Exception as e:
-            self.log(f"❌ Error loading state: {str(e)}", "ERROR")
-            return False
+            self.log(f"❌ Error loading from {filename}: {str(e)}", "ERROR")
+            raise
+    
+    def _validate_dict(self, value, default=None):
+        """Validate that value is a dictionary"""
+        if default is None:
+            default = {}
+        return value if isinstance(value, dict) else default
+    
+    def _validate_int(self, value, min_val=None, max_val=None, default=0):
+        """Validate integer values with optional bounds"""
+        try:
+            val = int(value)
+            if min_val is not None and val < min_val:
+                return min_val
+            if max_val is not None and val > max_val:
+                return max_val
+            return val
+        except (ValueError, TypeError):
+            return default
+    
+    def _validate_float(self, value, min_val=None, max_val=None, default=0.0):
+        """Validate float values with optional bounds"""
+        try:
+            val = float(value)
+            if min_val is not None and val < min_val:
+                return min_val
+            if max_val is not None and val > max_val:
+                return max_val
+            return val
+        except (ValueError, TypeError):
+            return default
 
     def restore_position_tracker_datetime(self):
         """แปลง datetime strings ใน position_tracker กลับเป็น datetime objects"""
@@ -3415,27 +4056,264 @@ class TradingSystem:
             self.log(f"Error cleaning up files: {str(e)}", "ERROR")
 
     def get_memory_status(self) -> dict:
-        """📊 สถานะหน่วยความจำ"""
+        """📊 สถานะหน่วยความจำ with detailed monitoring"""
         try:
-            status = {
-                'position_trackers': len(self.position_tracker),
-                'active_hedges': len(self.active_hedges),
-                'hedge_pairs': len(self.hedge_pairs),
-                'hourly_signals': len(self.hourly_signals),
+            import psutil
+            import sys
+            import gc
+            
+            # Get system memory info
+            process = psutil.Process(os.getpid())
+            memory_info = process.memory_info()
+            system_memory = psutil.virtual_memory()
+            
+            # Calculate object counts
+            object_counts = {
+                'position_trackers': len(getattr(self, 'position_tracker', {})),
+                'active_hedges': len(getattr(self, 'active_hedges', {})),
+                'hedge_pairs': len(getattr(self, 'hedge_pairs', {})),
+                'hourly_signals': len(getattr(self, 'hourly_signals', [])),
+                'active_positions': len(getattr(self, 'positions', [])),
+                'hedge_analytics_entries': len(getattr(self, 'hedge_analytics', {}))
+            }
+            
+            # Calculate memory usage of key data structures
+            memory_usage = {
+                'position_tracker_size': sys.getsizeof(getattr(self, 'position_tracker', {})),
+                'hourly_signals_size': sys.getsizeof(getattr(self, 'hourly_signals', [])),
+                'hedge_analytics_size': sys.getsizeof(getattr(self, 'hedge_analytics', {}))
+            }
+            
+            # File status
+            file_status = {
                 'has_saved_state': os.path.exists(self.state_file),
-                'has_positions_backup': os.path.exists(self.positions_file),
+                'has_positions_backup': os.path.exists(getattr(self, 'positions_file', '')),
+                'state_file_size': 0,
+                'backup_file_size': 0,
                 'last_save': 'Never'
             }
             
+            if file_status['has_saved_state']:
+                try:
+                    file_status['state_file_size'] = os.path.getsize(self.state_file)
+                    mod_time = os.path.getmtime(self.state_file)
+                    file_status['last_save'] = datetime.fromtimestamp(mod_time).strftime("%H:%M:%S")
+                except:
+                    pass
+            
+            if file_status['has_positions_backup']:
+                try:
+                    file_status['backup_file_size'] = os.path.getsize(getattr(self, 'positions_file', ''))
+                except:
+                    pass
+            
+            # Memory health assessment
+            memory_health = {
+                'process_memory_mb': memory_info.rss / 1024 / 1024,
+                'system_memory_percent': system_memory.percent,
+                'memory_available_mb': system_memory.available / 1024 / 1024,
+                'gc_objects': len(gc.get_objects()),
+                'memory_pressure': 'LOW'
+            }
+            
+            # Assess memory pressure
+            if memory_health['process_memory_mb'] > 500:  # 500MB
+                memory_health['memory_pressure'] = 'HIGH'
+            elif memory_health['process_memory_mb'] > 200:  # 200MB
+                memory_health['memory_pressure'] = 'MEDIUM'
+            
+            # Connection health
+            connection_health = {
+                'mt5_connected': getattr(self, 'mt5_connected', False),
+                'circuit_breaker_open': getattr(self, 'circuit_breaker_open', False),
+                'connection_failures': getattr(self, 'connection_failures', 0),
+                'last_connection_check': 'Never'
+            }
+            
+            if hasattr(self, 'last_mt5_ping') and self.last_mt5_ping:
+                connection_health['last_connection_check'] = self.last_mt5_ping.strftime("%H:%M:%S")
+            
+            status = {
+                'timestamp': datetime.now().isoformat(),
+                'object_counts': object_counts,
+                'memory_usage': memory_usage,
+                'file_status': file_status,
+                'memory_health': memory_health,
+                'connection_health': connection_health
+            }
+            
+            return status
+            
+        except ImportError:
+            # Fallback if psutil is not available
+            return self._get_basic_memory_status()
+        except Exception as e:
+            self.log(f"Error getting memory status: {str(e)}", "ERROR")
+            return self._get_basic_memory_status()
+    
+    def _get_basic_memory_status(self) -> dict:
+        """Basic memory status without psutil dependency"""
+        try:
+            status = {
+                'timestamp': datetime.now().isoformat(),
+                'object_counts': {
+                    'position_trackers': len(getattr(self, 'position_tracker', {})),
+                    'active_hedges': len(getattr(self, 'active_hedges', {})),
+                    'hedge_pairs': len(getattr(self, 'hedge_pairs', {})),
+                    'hourly_signals': len(getattr(self, 'hourly_signals', [])),
+                    'active_positions': len(getattr(self, 'positions', []))
+                },
+                'file_status': {
+                    'has_saved_state': os.path.exists(self.state_file),
+                    'has_positions_backup': os.path.exists(getattr(self, 'positions_file', '')),
+                    'last_save': 'Never'
+                },
+                'connection_health': {
+                    'mt5_connected': getattr(self, 'mt5_connected', False),
+                    'circuit_breaker_open': getattr(self, 'circuit_breaker_open', False),
+                    'connection_failures': getattr(self, 'connection_failures', 0)
+                }
+            }
+            
             if os.path.exists(self.state_file):
-                mod_time = os.path.getmtime(self.state_file)
-                status['last_save'] = datetime.fromtimestamp(mod_time).strftime("%H:%M:%S")
+                try:
+                    mod_time = os.path.getmtime(self.state_file)
+                    status['file_status']['last_save'] = datetime.fromtimestamp(mod_time).strftime("%H:%M:%S")
+                except:
+                    pass
             
             return status
             
         except Exception as e:
-            self.log(f"Error getting memory status: {str(e)}", "ERROR")
-            return {}
+            self.log(f"Error getting basic memory status: {str(e)}", "ERROR")
+            return {'error': str(e), 'timestamp': datetime.now().isoformat()}
+    
+    def perform_memory_management(self):
+        """🧹 Comprehensive memory management and cleanup"""
+        try:
+            self.log("🧹 Starting comprehensive memory management", "INFO")
+            
+            # Get initial memory status
+            initial_status = self.get_memory_status()
+            
+            # 1. Clean up closed positions
+            self.cleanup_closed_positions()
+            
+            # 2. Clean up old files
+            self.cleanup_old_files()
+            
+            # 3. Garbage collection
+            import gc
+            initial_objects = len(gc.get_objects())
+            collected = gc.collect()
+            final_objects = len(gc.get_objects())
+            
+            if collected > 0:
+                self.log(f"🗑️ Garbage collected: {collected} objects freed")
+                self.log(f"📊 Objects: {initial_objects} → {final_objects}")
+            
+            # 4. Validate and clean up data structures
+            self._validate_and_clean_data_structures()
+            
+            # 5. Force save state to ensure data persistence
+            self.save_trading_state()
+            
+            # Get final memory status
+            final_status = self.get_memory_status()
+            
+            # Report memory management results
+            if 'object_counts' in initial_status and 'object_counts' in final_status:
+                self.log("📊 Memory Management Results:")
+                for key in initial_status['object_counts']:
+                    initial_count = initial_status['object_counts'].get(key, 0)
+                    final_count = final_status['object_counts'].get(key, 0)
+                    if initial_count != final_count:
+                        self.log(f"   {key}: {initial_count} → {final_count}")
+            
+            self.log("✅ Memory management completed", "INFO")
+            
+        except Exception as e:
+            self.log(f"❌ Error in memory management: {str(e)}", "ERROR")
+    
+    def _validate_and_clean_data_structures(self):
+        """Validate and clean up data structures"""
+        try:
+            # Validate position_tracker
+            if hasattr(self, 'position_tracker') and isinstance(self.position_tracker, dict):
+                invalid_trackers = []
+                for ticket, tracker in self.position_tracker.items():
+                    if not isinstance(tracker, dict):
+                        invalid_trackers.append(ticket)
+                        continue
+                    
+                    # Ensure required fields exist
+                    required_fields = ['birth_time', 'initial_price', 'max_profit', 'min_profit']
+                    for field in required_fields:
+                        if field not in tracker:
+                            if field == 'birth_time':
+                                tracker[field] = datetime.now()
+                            elif field in ['initial_price', 'max_profit', 'min_profit']:
+                                tracker[field] = 0.0
+                
+                for ticket in invalid_trackers:
+                    del self.position_tracker[ticket]
+                    
+                if invalid_trackers:
+                    self.log(f"🧹 Removed {len(invalid_trackers)} invalid position trackers")
+            
+            # Validate active_hedges
+            if hasattr(self, 'active_hedges') and isinstance(self.active_hedges, dict):
+                invalid_hedges = []
+                for key, hedge_list in self.active_hedges.items():
+                    if not isinstance(hedge_list, list):
+                        invalid_hedges.append(key)
+                
+                for key in invalid_hedges:
+                    del self.active_hedges[key]
+                    
+                if invalid_hedges:
+                    self.log(f"🧹 Removed {len(invalid_hedges)} invalid hedge entries")
+            
+            # Validate hedge_pairs
+            if hasattr(self, 'hedge_pairs') and isinstance(self.hedge_pairs, dict):
+                invalid_pairs = []
+                for key, pair_data in self.hedge_pairs.items():
+                    if not isinstance(pair_data, dict):
+                        invalid_pairs.append(key)
+                
+                for key in invalid_pairs:
+                    del self.hedge_pairs[key]
+                    
+                if invalid_pairs:
+                    self.log(f"🧹 Removed {len(invalid_pairs)} invalid hedge pairs")
+            
+            # Validate numeric fields
+            numeric_fields = [
+                'daily_trades', 'total_signals', 'successful_signals',
+                'total_redirects', 'successful_redirects', 'redirect_profit_captured',
+                'total_pair_closes', 'successful_pair_closes', 'pair_profit_captured',
+                'total_group_closes', 'group_profit_captured', 'portfolio_health',
+                'base_lot', 'connection_failures'
+            ]
+            
+            for field in numeric_fields:
+                if hasattr(self, field):
+                    value = getattr(self, field)
+                    if not isinstance(value, (int, float)):
+                        try:
+                            setattr(self, field, float(value) if '.' in str(value) else int(value))
+                        except (ValueError, TypeError):
+                            # Set to safe default
+                            if 'ratio' in field or 'percent' in field or field == 'portfolio_health':
+                                setattr(self, field, 100.0)
+                            elif 'lot' in field:
+                                setattr(self, field, 0.01)
+                            else:
+                                setattr(self, field, 0)
+                            self.log(f"Reset invalid {field} to default", "WARNING")
+            
+        except Exception as e:
+            self.log(f"Error validating data structures: {str(e)}", "ERROR")
 
     def emergency_state_recovery(self):
         """🚨 กู้คืนสถานะฉุกเฉิน"""
