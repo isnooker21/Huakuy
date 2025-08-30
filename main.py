@@ -513,24 +513,63 @@ class TradingSystem:
 
     def get_market_data(self) -> Optional[pd.DataFrame]:
         """Get recent market data for analysis"""
-        if not self.mt5_connected:
+        if not self.validate_mt5_connection():
+            return None
+        
+        # Validate symbol
+        if not self.symbol or self.symbol.strip() == "":
+            self.log("Cannot get market data: invalid symbol", "ERROR")
             return None
             
         try:
+            self.log(f"Fetching market data for {self.symbol}", "DEBUG")
+            
             # Get last 15 M5 candles (เพิ่มจาก 10)
             rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M5, 0, 15)
-            if rates is None or len(rates) < 5:
+            if rates is None:
+                self.log(f"No market data available for {self.symbol}", "WARNING")
                 return None
+                
+            if len(rates) < 5:
+                self.log(f"Insufficient market data: only {len(rates)} candles", "WARNING")
+                return None
+                
+            # Validate rate data
+            for i, rate in enumerate(rates):
+                if not all(hasattr(rate, field) for field in ['time', 'open', 'high', 'low', 'close', 'tick_volume']):
+                    self.log(f"Invalid rate data at index {i}", "WARNING")
+                    return None
+                
+                # Check for reasonable price values
+                if not all(isinstance(getattr(rate, field), (int, float)) and getattr(rate, field) > 0 
+                          for field in ['open', 'high', 'low', 'close']):
+                    self.log(f"Invalid price data at index {i}", "WARNING")
+                    return None
+                
+                # Basic OHLC validation
+                if not (rate.low <= rate.open <= rate.high and rate.low <= rate.close <= rate.high):
+                    self.log(f"Invalid OHLC relationship at index {i}", "WARNING")
+                    return None
                 
             df = pd.DataFrame(rates)
             df['time'] = pd.to_datetime(df['time'], unit='s')
             
-            # Calculate candle properties
-            df['body'] = abs(df['close'] - df['open'])
-            df['total_range'] = df['high'] - df['low']
-            df['body_ratio'] = df['body'] / df['total_range'] * 100
-            df['is_green'] = df['close'] > df['open']
-            df['movement'] = abs(df['close'] - df['open'])
+            # Calculate candle properties with error handling
+            try:
+                df['body'] = abs(df['close'] - df['open'])
+                df['total_range'] = df['high'] - df['low']
+                
+                # Avoid division by zero
+                df['body_ratio'] = 0.0
+                non_zero_range = df['total_range'] > 0
+                df.loc[non_zero_range, 'body_ratio'] = (df.loc[non_zero_range, 'body'] / df.loc[non_zero_range, 'total_range']) * 100
+                
+                df['is_green'] = df['close'] > df['open']
+                df['movement'] = abs(df['close'] - df['open'])
+                
+            except Exception as e:
+                self.log(f"Error calculating market data properties: {str(e)}", "ERROR")
+                return None
             
             # คำนวณและเก็บ volatility
             self.recent_volatility = self.calculate_market_volatility(df)
@@ -1470,25 +1509,25 @@ class TradingSystem:
                         continue
                     
                     profit_per_lot = pos.profit / pos.volume if pos.volume > 0 else 0
-                
-                # Classify efficiency
-                if profit_per_lot > 100:
-                    efficiency = "excellent"
-                elif profit_per_lot > 50:
-                    efficiency = "good"
-                elif profit_per_lot > 0:
-                    efficiency = "fair"
-                else:
-                    efficiency = "poor"
-                
-                # Assign role (simplified logic)
-                role = self.assign_position_role(pos, profit_per_lot)
-                
-                position = Position(
-                    ticket=pos.ticket,
-                    symbol=pos.symbol,
-                    type="BUY" if pos.type == 0 else "SELL",
-                    volume=pos.volume,
+                    
+                    # Classify efficiency
+                    if profit_per_lot > 100:
+                        efficiency = "excellent"
+                    elif profit_per_lot > 50:
+                        efficiency = "good"
+                    elif profit_per_lot > 0:
+                        efficiency = "fair"
+                    else:
+                        efficiency = "poor"
+                    
+                    # Assign role (simplified logic)
+                    role = self.assign_position_role(pos, profit_per_lot)
+                    
+                    position = Position(
+                        ticket=pos.ticket,
+                        symbol=pos.symbol,
+                        type="BUY" if pos.type == 0 else "SELL",
+                        volume=pos.volume,
                     open_price=pos.price_open,
                     current_price=current_price,
                     profit=pos.profit,
@@ -1497,13 +1536,17 @@ class TradingSystem:
                     efficiency=efficiency
                 )
                 
-                self.positions.append(position)
-                
-                # Update volume counters
-                if pos.type == 0:  # BUY
-                    self.buy_volume += pos.volume
-                else:  # SELL
-                    self.sell_volume += pos.volume
+                    self.positions.append(position)
+                    
+                    # Update volume counters
+                    if pos.type == 0:  # BUY
+                        self.buy_volume += pos.volume
+                    else:  # SELL
+                        self.sell_volume += pos.volume
+                        
+                except Exception as e:
+                    self.log(f"Error processing position {getattr(pos, 'ticket', 'unknown')}: {str(e)}", "WARNING")
+                    continue
             
             # Calculate portfolio health
             self.calculate_portfolio_health()
@@ -2473,16 +2516,41 @@ class TradingSystem:
         pairs = []
         
         try:
-            if not self.pair_closing_enabled or len(self.positions) < 2:
+            self.log("Finding profitable pairs", "DEBUG")
+            
+            # Validate basic requirements
+            if not hasattr(self, 'pair_closing_enabled') or not self.pair_closing_enabled:
+                self.log("Pair closing disabled", "DEBUG")
+                return pairs
+                
+            if not self.positions or len(self.positions) < 2:
+                self.log(f"Insufficient positions for pairing: {len(self.positions) if self.positions else 0}", "DEBUG")
                 return pairs
             
-            # แยกไม้กำไรและขาดทุน
-            profitable_positions = [p for p in self.positions if self.calculate_profit_percent(p) > 0]
-            loss_positions = [p for p in self.positions 
-                            if self.calculate_profit_percent(p) < 0 
-                            and self.calculate_profit_percent(p) >= self.max_loss_percent]
+            # Validate positions before processing
+            valid_positions = [p for p in self.positions if self.validate_position(p)]
+            if len(valid_positions) < 2:
+                self.log(f"Insufficient valid positions for pairing: {len(valid_positions)}", "WARNING")
+                return pairs
+            
+            # แยกไม้กำไรและขาดทุน with additional validation
+            profitable_positions = []
+            loss_positions = []
+            
+            for p in valid_positions:
+                try:
+                    profit_pct = self.calculate_profit_percent(p)
+                    if isinstance(profit_pct, (int, float)):
+                        if profit_pct > 0:
+                            profitable_positions.append(p)
+                        elif profit_pct < 0 and hasattr(self, 'max_loss_percent') and profit_pct >= self.max_loss_percent:
+                            loss_positions.append(p)
+                except Exception as e:
+                    self.log(f"Error calculating profit percent for position {p.ticket}: {str(e)}", "WARNING")
+                    continue
             
             if not profitable_positions or not loss_positions:
+                self.log(f"No viable pairs: {len(profitable_positions)} profitable, {len(loss_positions)} loss positions", "DEBUG")
                 return pairs
             
             # หาคู่ที่ดีที่สุด
