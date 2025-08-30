@@ -235,6 +235,120 @@ class TradingSystem:
         else:
             logger.info(message)
 
+    def validate_signal(self, signal: Signal) -> bool:
+        """Validate signal object and its parameters"""
+        try:
+            if signal is None:
+                self.log("Signal validation failed: signal is None", "ERROR")
+                return False
+            
+            if not hasattr(signal, 'direction') or signal.direction not in ['BUY', 'SELL']:
+                self.log(f"Signal validation failed: invalid direction '{getattr(signal, 'direction', 'None')}'", "ERROR")
+                return False
+            
+            if not hasattr(signal, 'strength') or not isinstance(signal.strength, (int, float)):
+                self.log(f"Signal validation failed: invalid strength '{getattr(signal, 'strength', 'None')}'", "ERROR")
+                return False
+            
+            if signal.strength < 0.5 or signal.strength > 3.0:
+                self.log(f"Signal validation failed: strength {signal.strength} out of range [0.5, 3.0]", "ERROR")
+                return False
+            
+            if not hasattr(signal, 'symbol') or not signal.symbol or signal.symbol.strip() == "":
+                self.log(f"Signal validation failed: invalid symbol '{getattr(signal, 'symbol', 'None')}'", "ERROR")
+                return False
+            
+            if not hasattr(signal, 'price') or not isinstance(signal.price, (int, float)) or signal.price <= 0:
+                self.log(f"Signal validation failed: invalid price '{getattr(signal, 'price', 'None')}'", "ERROR")
+                return False
+            
+            if not hasattr(signal, 'reason') or not signal.reason or signal.reason.strip() == "":
+                self.log(f"Signal validation failed: invalid reason '{getattr(signal, 'reason', 'None')}'", "ERROR")
+                return False
+            
+            self.log(f"Signal validation passed: {signal.direction} {signal.strength}", "DEBUG")
+            return True
+            
+        except Exception as e:
+            self.log(f"Error validating signal: {str(e)}", "ERROR")
+            return False
+
+    def validate_lot_size(self, lot_size: float) -> bool:
+        """Validate lot size parameter"""
+        try:
+            if lot_size is None or not isinstance(lot_size, (int, float)):
+                self.log(f"Lot size validation failed: invalid type '{type(lot_size)}'", "ERROR")
+                return False
+            
+            if lot_size <= 0:
+                self.log(f"Lot size validation failed: non-positive value {lot_size}", "ERROR")
+                return False
+            
+            if lot_size < 0.01:
+                self.log(f"Lot size validation failed: below minimum 0.01, got {lot_size}", "ERROR")
+                return False
+            
+            if lot_size > 10.0:  # Reasonable maximum to prevent large losses
+                self.log(f"Lot size validation failed: above maximum 10.0, got {lot_size}", "ERROR")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            self.log(f"Error validating lot size: {str(e)}", "ERROR")
+            return False
+
+    def validate_position(self, position: Position) -> bool:
+        """Validate position object and its parameters"""
+        try:
+            if position is None:
+                self.log("Position validation failed: position is None", "ERROR")
+                return False
+            
+            if not hasattr(position, 'ticket') or not isinstance(position.ticket, int) or position.ticket <= 0:
+                self.log(f"Position validation failed: invalid ticket '{getattr(position, 'ticket', 'None')}'", "ERROR")
+                return False
+            
+            if not hasattr(position, 'symbol') or not position.symbol or position.symbol.strip() == "":
+                self.log(f"Position validation failed: invalid symbol '{getattr(position, 'symbol', 'None')}'", "ERROR")
+                return False
+            
+            if not hasattr(position, 'type') or position.type not in ['BUY', 'SELL']:
+                self.log(f"Position validation failed: invalid type '{getattr(position, 'type', 'None')}'", "ERROR")
+                return False
+            
+            if not hasattr(position, 'volume') or not isinstance(position.volume, (int, float)) or position.volume <= 0:
+                self.log(f"Position validation failed: invalid volume '{getattr(position, 'volume', 'None')}'", "ERROR")
+                return False
+            
+            if not hasattr(position, 'open_price') or not isinstance(position.open_price, (int, float)) or position.open_price <= 0:
+                self.log(f"Position validation failed: invalid open_price '{getattr(position, 'open_price', 'None')}'", "ERROR")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            self.log(f"Error validating position: {str(e)}", "ERROR")
+            return False
+
+    def validate_mt5_connection(self) -> bool:
+        """Validate MT5 connection and log status"""
+        try:
+            if not self.mt5_connected:
+                self.log("MT5 connection validation failed: not connected", "ERROR")
+                return False
+            
+            # Test connection with a simple operation
+            if mt5.account_info() is None:
+                self.log("MT5 connection validation failed: cannot get account info", "ERROR")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            self.log(f"Error validating MT5 connection: {str(e)}", "ERROR")
+            return False
+
     def detect_broker_filling_type(self) -> int:
         """Auto-detect broker's supported filling type"""
         if not self.mt5_connected:
@@ -915,20 +1029,36 @@ class TradingSystem:
 
     def calculate_dynamic_lot_size(self, signal: Signal) -> float:
         """Calculate advanced dynamic lot size with multiple factors"""
+        # Input validation
+        if not self.validate_signal(signal):
+            self.log("Using base lot size due to invalid signal", "WARNING")
+            return self.base_lot
+        
         try:
+            self.log(f"Calculating lot size for signal strength {signal.strength}", "DEBUG")
+            
+            # Validate base_lot is positive
+            if not isinstance(self.base_lot, (int, float)) or self.base_lot <= 0:
+                self.log(f"Invalid base_lot {self.base_lot}, using default 0.01", "WARNING")
+                self.base_lot = 0.01
+            
             # 1. Base lot จาก signal strength
             base_lot = self.base_lot * signal.strength
             
             # 2. Account equity adjustment
             account_info = mt5.account_info()
             if account_info:
-                equity = account_info.equity
-                balance = account_info.balance
-                
-                # Risk per trade = 1-3% ของ equity ตาม signal strength
-                risk_percent = 0.01 + (signal.strength - 0.5) * 0.008  # 1%-3%
-                risk_amount = equity * risk_percent
-                
+                # Validate account info values
+                if not isinstance(account_info.equity, (int, float)) or account_info.equity <= 0:
+                    self.log(f"Invalid account equity {account_info.equity}, skipping equity adjustment", "WARNING")
+                else:
+                    equity = account_info.equity
+                    balance = account_info.balance
+                    
+                    # Risk per trade = 1-3% ของ equity ตาม signal strength
+                    risk_percent = 0.01 + (signal.strength - 0.5) * 0.008  # 1%-3%
+                    risk_amount = equity * risk_percent
+                    
                 # คำนวณ lot จาก risk amount (สมมติ stop loss 50 pips)
                 pip_value = 1.0  # XAUUSD 1 pip = $1 per 0.01 lot
                 stop_loss_pips = 50
@@ -989,6 +1119,12 @@ class TradingSystem:
             lot_size = round(base_lot, 2)
             lot_size = max(0.01, min(2.0, lot_size))  # ขั้นต่ำ 0.01, สูงสุด 2.0
             
+            # Final validation of calculated lot size
+            if not self.validate_lot_size(lot_size):
+                self.log(f"Calculated lot size {lot_size} invalid, using base lot", "WARNING")
+                lot_size = self.base_lot
+            
+            self.log(f"Final lot size calculated: {lot_size}", "DEBUG")
             return lot_size
             
         except Exception as e:
@@ -1173,10 +1309,20 @@ class TradingSystem:
 
     def execute_order(self, signal: Signal) -> bool:
         """Execute order with smart routing"""
+        # Input validation
+        if not self.validate_signal(signal):
+            return False
+        
+        if not self.validate_mt5_connection():
+            return False
+        
         if not self.can_trade():
+            self.log("Cannot execute order: trading conditions not met", "WARNING")
             return False
             
         try:
+            self.log(f"Executing order: {signal.direction} {signal.strength} for {signal.symbol}", "INFO")
+            
             # ใช้ Smart Signal Router
             router_result = self.smart_signal_router(signal)
             
@@ -1206,13 +1352,32 @@ class TradingSystem:
 
     def execute_normal_order(self, signal: Signal) -> bool:
         """Execute normal market order"""
+        # Input validation
+        if not self.validate_signal(signal):
+            return False
+        
+        if not self.validate_mt5_connection():
+            return False
+        
         try:
+            self.log(f"Executing normal order: {signal.direction} for {signal.symbol}", "INFO")
+            
             lot_size = self.calculate_lot_size(signal)
+            
+            # Validate calculated lot size
+            if not self.validate_lot_size(lot_size):
+                return False
+            
             order_type = mt5.ORDER_TYPE_BUY if signal.direction == 'BUY' else mt5.ORDER_TYPE_SELL
             
             # Ensure we have a valid filling type
             if self.filling_type is None:
                 self.filling_type = self.detect_broker_filling_type()
+            
+            # Validate symbol before creating request
+            if not self.symbol or self.symbol.strip() == "":
+                self.log("Order execution failed: invalid symbol", "ERROR")
+                return False
             
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
@@ -1263,10 +1428,17 @@ class TradingSystem:
 
     def update_positions(self):
         """Update position data and calculate metrics"""
-        if not self.mt5_connected:
+        if not self.validate_mt5_connection():
             return
             
         try:
+            self.log("Updating positions data", "DEBUG")
+            
+            # Validate symbol before getting positions
+            if not self.symbol or self.symbol.strip() == "":
+                self.log("Cannot update positions: invalid symbol", "ERROR")
+                return
+                
             positions = mt5.positions_get(symbol=self.symbol)
             if positions is None:
                 positions = []
@@ -1276,8 +1448,28 @@ class TradingSystem:
             self.sell_volume = 0.0
             
             for pos in positions:
-                current_price = mt5.symbol_info_tick(self.symbol).bid if pos.type == 1 else mt5.symbol_info_tick(self.symbol).ask
-                profit_per_lot = pos.profit / pos.volume if pos.volume > 0 else 0
+                try:
+                    # Validate position data from MT5
+                    if not hasattr(pos, 'ticket') or not hasattr(pos, 'volume') or not hasattr(pos, 'profit'):
+                        self.log(f"Skipping invalid position data", "WARNING")
+                        continue
+                    
+                    if pos.volume <= 0:
+                        self.log(f"Skipping position {pos.ticket} with invalid volume {pos.volume}", "WARNING")
+                        continue
+                    
+                    # Get current price with error handling
+                    try:
+                        tick_info = mt5.symbol_info_tick(self.symbol)
+                        if tick_info is None:
+                            self.log(f"Cannot get tick info for {self.symbol}", "WARNING")
+                            continue
+                        current_price = tick_info.bid if pos.type == 1 else tick_info.ask
+                    except Exception as e:
+                        self.log(f"Error getting current price: {str(e)}", "WARNING")
+                        continue
+                    
+                    profit_per_lot = pos.profit / pos.volume if pos.volume > 0 else 0
                 
                 # Classify efficiency
                 if profit_per_lot > 100:
@@ -1334,11 +1526,27 @@ class TradingSystem:
         """Calculate overall portfolio health score"""
         if not self.positions:
             self.portfolio_health = 100.0
+            self.log("Portfolio health set to 100% (no positions)", "DEBUG")
             return
             
         try:
-            total_profit = sum(pos.profit for pos in self.positions)
-            total_volume = sum(pos.volume for pos in self.positions)
+            self.log("Calculating portfolio health", "DEBUG")
+            
+            # Validate positions data
+            valid_positions = []
+            for pos in self.positions:
+                if self.validate_position(pos):
+                    valid_positions.append(pos)
+                else:
+                    self.log(f"Excluding invalid position {getattr(pos, 'ticket', 'unknown')} from health calculation", "WARNING")
+            
+            if not valid_positions:
+                self.portfolio_health = 50.0  # Default for invalid data
+                self.log("Portfolio health set to 50% (no valid positions)", "WARNING")
+                return
+            
+            total_profit = sum(pos.profit for pos in valid_positions if hasattr(pos, 'profit') and isinstance(pos.profit, (int, float)))
+            total_volume = sum(pos.volume for pos in valid_positions if hasattr(pos, 'volume') and isinstance(pos.volume, (int, float)) and pos.volume > 0)
             
             # Volume balance factor
             total_vol = self.buy_volume + self.sell_volume
@@ -1349,8 +1557,8 @@ class TradingSystem:
                 balance_factor = 1.0 - (imbalance * 0.5)  # Max 25% penalty
             
             # Efficiency distribution
-            excellent_count = len([p for p in self.positions if p.efficiency == "excellent"])
-            good_count = len([p for p in self.positions if p.efficiency == "good"])
+            excellent_count = len([p for p in valid_positions if hasattr(p, 'efficiency') and p.efficiency == "excellent"])
+            good_count = len([p for p in valid_positions if hasattr(p, 'efficiency') and p.efficiency == "good"])
             poor_count = len([p for p in self.positions if p.efficiency == "poor"])
             
             efficiency_score = (excellent_count * 100 + good_count * 70 - poor_count * 30) / len(self.positions)
@@ -1362,6 +1570,8 @@ class TradingSystem:
             # Calculate final health score
             self.portfolio_health = efficiency_score * balance_factor * position_factor
             self.portfolio_health = max(0, min(100, self.portfolio_health))
+            
+            self.log(f"Portfolio health calculated: {self.portfolio_health:.1f}%", "DEBUG")
             
         except Exception as e:
             self.log(f"Error calculating portfolio health: {str(e)}", "ERROR")
@@ -1926,12 +2136,30 @@ class TradingSystem:
 
     def close_position_smart(self, position: Position, reason: str) -> bool:
         """ปิด position อย่างชาญฉลาด"""
+        # Input validation
+        if not self.validate_position(position):
+            return False
+        
+        if not self.validate_mt5_connection():
+            return False
+        
+        if not reason or reason.strip() == "":
+            self.log("Close position failed: invalid reason", "ERROR")
+            return False
+        
         try:
+            self.log(f"Closing position {position.ticket}: {position.type} {position.volume} lots - {reason}", "INFO")
+            
             close_type = mt5.ORDER_TYPE_SELL if position.type == "BUY" else mt5.ORDER_TYPE_BUY
             
             # Ensure we have a valid filling type
             if self.filling_type is None:
                 self.filling_type = self.detect_broker_filling_type()
+            
+            # Validate position volume
+            if not self.validate_lot_size(position.volume):
+                self.log(f"Invalid position volume {position.volume}", "ERROR")
+                return False
             
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
