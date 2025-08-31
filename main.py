@@ -6397,7 +6397,7 @@ class TradingGUI:
 
     def create_connection_card(self, parent):
         """Create connection control card"""
-        card_content = self.create_card(parent, "🔌 Connection", width=280)
+        card_content = self.create_card(parent, "🔌 Connection", width=280, height=140)
         # Pack the card container properly
         card_content.card_container.pack(side='left', padx=(0, 12), fill='y')
         
@@ -6437,7 +6437,7 @@ class TradingGUI:
 
     def create_terminal_card(self, parent):
         """Create terminal selection card"""
-        card_content = self.create_card(parent, "🖥️ Terminal Selection", width=280)
+        card_content = self.create_card(parent, "🖥️ Terminal Selection", width=280, height=140)
         card_content.card_container.pack(side='left', padx=(0, 12), fill='y')
         
         # Scan buttons
@@ -6467,7 +6467,7 @@ class TradingGUI:
 
     def create_trading_card(self, parent):
         """Create trading control card"""
-        card_content = self.create_card(parent, "▶️ Trading Control", width=280)
+        card_content = self.create_card(parent, "▶️ Trading Control", width=280, height=180)
         card_content.card_container.pack(side='left', padx=(0, 12), fill='y')
         
         # Trading buttons
@@ -6518,7 +6518,7 @@ class TradingGUI:
 
     def create_live_stats_card(self, parent):
         """Create live statistics card"""
-        card_content = self.create_card(parent, "📊 Live Stats", width=300)
+        card_content = self.create_card(parent, "📊 Live Stats", width=300, height=200)
         card_content.card_container.pack(side='right', fill='y')
         
         # Current P&L display
@@ -6743,7 +6743,7 @@ class TradingGUI:
         cards_row.pack(fill='x')
         
         # Performance Metrics Card
-        performance_card_content = self.create_card(cards_row, "📊 Performance Metrics", width=300)
+        performance_card_content = self.create_card(cards_row, "📊 Performance Metrics", width=300, height=140)
         performance_card_content.card_container.pack(side='left', padx=(0, 12), fill='y')
         
         # Success rate display
@@ -6787,7 +6787,7 @@ class TradingGUI:
         self.risk_level_label.pack(side='right')
         
         # Portfolio Visualization Card
-        portfolio_card_content = self.create_card(cards_row, "💼 Portfolio Overview", width=280)
+        portfolio_card_content = self.create_card(cards_row, "💼 Portfolio Overview", width=280, height=140)
         portfolio_card_content.card_container.pack(side='left', padx=(0, 12), fill='y')
         
         # Mini donut chart for portfolio balance
@@ -6808,7 +6808,7 @@ class TradingGUI:
         self.sell_volume_label.pack(side='right')
         
         # Smart Insights Card
-        insights_card_content = self.create_card(cards_row, "🧠 Smart Insights", width=380)
+        insights_card_content = self.create_card(cards_row, "🧠 Smart Insights", width=380, height=140)
         insights_card_content.card_container.pack(side='right', fill='y')
         
         self.recommendations_text = tk.Text(insights_card_content, height=5, 
