@@ -6105,7 +6105,7 @@ class TradingGUI:
             try:
                 self.create_modern_header()
                 component_success += 1
-                print("✅ Header created")
+                print("✅ Header created and packed")
             except Exception as e:
                 print(f"⚠️ Header creation failed: {e}")
                 self.startup_errors.append(f"Header: {e}")
@@ -6113,7 +6113,7 @@ class TradingGUI:
             try:
                 self.create_control_cards()
                 component_success += 1
-                print("✅ Control cards created")
+                print("✅ Control cards created and packed")
             except Exception as e:
                 print(f"⚠️ Control cards creation failed: {e}")
                 self.startup_errors.append(f"Control cards: {e}")
@@ -6121,7 +6121,7 @@ class TradingGUI:
             try:
                 self.create_data_section()
                 component_success += 1
-                print("✅ Data section created")
+                print("✅ Data section created and packed")
             except Exception as e:
                 print(f"⚠️ Data section creation failed: {e}")
                 self.startup_errors.append(f"Data section: {e}")
@@ -6129,7 +6129,7 @@ class TradingGUI:
             try:
                 self.create_analytics_dashboard()
                 component_success += 1
-                print("✅ Analytics dashboard created")
+                print("✅ Analytics dashboard created and packed")
             except Exception as e:
                 print(f"⚠️ Analytics dashboard creation failed: {e}")
                 self.startup_errors.append(f"Analytics: {e}")
@@ -6137,12 +6137,15 @@ class TradingGUI:
             try:
                 self.create_log_panel()
                 component_success += 1
-                print("✅ Log panel created")
+                print("✅ Log panel created and packed")
             except Exception as e:
                 print(f"⚠️ Log panel creation failed: {e}")
                 self.startup_errors.append(f"Log panel: {e}")
             
             print(f"📊 GUI Components loaded: {component_success}/{total_components}")
+            
+            # Add debug output for widget hierarchy
+            self.debug_widget_hierarchy()
             
             # Connect trading system to root
             if hasattr(self.trading_system, 'root'):
@@ -6307,12 +6310,12 @@ class TradingGUI:
         header_container = tk.Frame(self.root, bg=self.COLORS['bg_primary'])
         header_container.pack(fill='x', padx=15, pady=(15, 8))
         
-        # Main header card
+        # Main header card (pack first)
         header_card = tk.Frame(header_container, bg=self.COLORS['bg_secondary'], 
                               relief='flat', bd=0)
-        header_card.pack(fill='x')
+        header_card.pack(fill='x', pady=(0, 2))
         
-        # Add shadow effect
+        # Add shadow effect (pack after main card)
         shadow_frame = tk.Frame(header_container, bg=self.COLORS['card_shadow'], height=2)
         shadow_frame.pack(fill='x')
         
@@ -6373,11 +6376,12 @@ class TradingGUI:
 
     def create_connection_card(self, parent):
         """Create connection control card"""
-        card = self.create_card(parent, "🔌 Connection", width=240)
-        card.pack(side='left', padx=(0, 12))
+        card_content = self.create_card(parent, "🔌 Connection", width=240)
+        # Pack the card container properly
+        card_content.card_container.pack(side='left', padx=(0, 12), fill='y')
         
         # Connection buttons with modern styling
-        btn_frame = tk.Frame(card, bg=self.COLORS['bg_secondary'])
+        btn_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
         btn_frame.pack(fill='x', pady=8)
         
         self.connect_btn = ttk.Button(btn_frame, text="🔌 Connect MT5", 
@@ -6390,11 +6394,11 @@ class TradingGUI:
 
     def create_terminal_card(self, parent):
         """Create terminal selection card"""
-        card = self.create_card(parent, "🖥️ Terminal Selection", width=280)
-        card.pack(side='left', padx=(0, 12))
+        card_content = self.create_card(parent, "🖥️ Terminal Selection", width=280)
+        card_content.card_container.pack(side='left', padx=(0, 12), fill='y')
         
         # Scan buttons
-        btn_frame = tk.Frame(card, bg=self.COLORS['bg_secondary'])
+        btn_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
         btn_frame.pack(fill='x', pady=(0, 8))
         
         self.scan_btn = ttk.Button(btn_frame, text="🔍 Scan", 
@@ -6407,24 +6411,24 @@ class TradingGUI:
         
         # Terminal selection dropdown
         self.terminal_var = tk.StringVar()
-        self.terminal_combobox = ttk.Combobox(card, textvariable=self.terminal_var, 
+        self.terminal_combobox = ttk.Combobox(card_content, textvariable=self.terminal_var, 
                                             state='readonly', style='Modern.TCombobox',
                                             font=('Segoe UI', 8))
         self.terminal_combobox.pack(fill='x', pady=(0, 6))
         self.terminal_combobox.bind('<<ComboboxSelected>>', self.on_terminal_selected)
         
         # Terminal info with modern styling
-        self.terminal_info_label = ttk.Label(card, text="Click 'Scan' to find terminals", 
+        self.terminal_info_label = ttk.Label(card_content, text="Click 'Scan' to find terminals", 
                                            style='Status.TLabel', font=('Segoe UI', 8))
         self.terminal_info_label.pack(fill='x')
 
     def create_trading_card(self, parent):
         """Create trading control card"""
-        card = self.create_card(parent, "▶️ Trading Control", width=240)
-        card.pack(side='left', padx=(0, 12))
+        card_content = self.create_card(parent, "▶️ Trading Control", width=240)
+        card_content.card_container.pack(side='left', padx=(0, 12), fill='y')
         
         # Trading buttons
-        btn_frame = tk.Frame(card, bg=self.COLORS['bg_secondary'])
+        btn_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
         btn_frame.pack(fill='x', pady=8)
         
         self.start_btn = ttk.Button(btn_frame, text="▶️ Start Trading", 
@@ -6437,11 +6441,11 @@ class TradingGUI:
 
     def create_live_stats_card(self, parent):
         """Create live statistics card"""
-        card = self.create_card(parent, "📊 Live Stats", width=260)
-        card.pack(side='right')
+        card_content = self.create_card(parent, "📊 Live Stats", width=260)
+        card_content.card_container.pack(side='right', fill='y')
         
         # Portfolio health with progress indicator
-        health_frame = tk.Frame(card, bg=self.COLORS['bg_secondary'])
+        health_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
         health_frame.pack(fill='x', pady=(0, 6))
         
         self.portfolio_label = ttk.Label(health_frame, text="💼 Portfolio Health", 
@@ -6454,7 +6458,7 @@ class TradingGUI:
         self.health_canvas.pack(fill='x', pady=(4, 0))
         
         # Volume balance with visual indicator
-        volume_frame = tk.Frame(card, bg=self.COLORS['bg_secondary'])
+        volume_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
         volume_frame.pack(fill='x')
         
         self.volume_label = ttk.Label(volume_frame, text="⚖️ Volume Balance", 
@@ -6475,14 +6479,14 @@ class TradingGUI:
         if height:
             card_container.configure(height=height)
         
-        # Shadow effect (smaller)
-        shadow = tk.Frame(card_container, bg=self.COLORS['card_shadow'], height=2)
-        shadow.pack(side='bottom', fill='x')
-        
-        # Main card
+        # Main card (pack first to ensure proper layout)
         card = tk.Frame(card_container, bg=self.COLORS['bg_secondary'], 
                        relief='flat', bd=0)
-        card.pack(fill='both', expand=True)
+        card.pack(fill='both', expand=True, padx=0, pady=(0, 2))
+        
+        # Shadow effect (pack after main card)
+        shadow = tk.Frame(card_container, bg=self.COLORS['card_shadow'], height=2)
+        shadow.pack(side='bottom', fill='x')
         
         # Card header
         header = tk.Frame(card, bg=self.COLORS['bg_accent'])
@@ -6495,6 +6499,8 @@ class TradingGUI:
         content = tk.Frame(card, bg=self.COLORS['bg_secondary'])
         content.pack(fill='both', expand=True, padx=12, pady=12)
         
+        # Return both container and content for proper layout management
+        content.card_container = card_container
         return content
 
     def create_data_section(self):
@@ -6504,11 +6510,11 @@ class TradingGUI:
         data_container.pack(fill='both', expand=True, padx=15, pady=8)
         
         # Positions card
-        positions_card = self.create_large_card(data_container, "📊 Active Positions")
-        positions_card.pack(fill='both', expand=True)
+        positions_card_content = self.create_large_card(data_container, "📊 Active Positions")
+        positions_card_content.card_container.pack(fill='both', expand=True)
         
         # Positions toolbar
-        toolbar = tk.Frame(positions_card, bg=self.COLORS['bg_secondary'])
+        toolbar = tk.Frame(positions_card_content, bg=self.COLORS['bg_secondary'])
         toolbar.pack(fill='x', pady=(0, 8))
         
         # Position count indicator
@@ -6521,7 +6527,7 @@ class TradingGUI:
         filter_frame.pack(side='right')
         
         # Create modern treeview for positions
-        tree_frame = tk.Frame(positions_card, bg=self.COLORS['bg_secondary'])
+        tree_frame = tk.Frame(positions_card_content, bg=self.COLORS['bg_secondary'])
         tree_frame.pack(fill='both', expand=True)
         
         # Enhanced columns with better organization
@@ -6592,14 +6598,14 @@ class TradingGUI:
         # Card container
         card_container = tk.Frame(parent, bg=self.COLORS['bg_primary'])
         
-        # Shadow effect (smaller)
-        shadow = tk.Frame(card_container, bg=self.COLORS['card_shadow'], height=2)
-        shadow.pack(side='bottom', fill='x')
-        
-        # Main card
+        # Main card (pack first to ensure proper layout)
         card = tk.Frame(card_container, bg=self.COLORS['bg_secondary'], 
                        relief='flat', bd=0)
-        card.pack(fill='both', expand=True)
+        card.pack(fill='both', expand=True, padx=0, pady=(0, 2))
+        
+        # Shadow effect (pack after main card)
+        shadow = tk.Frame(card_container, bg=self.COLORS['card_shadow'], height=2)
+        shadow.pack(side='bottom', fill='x')
         
         # Card header with modern styling (reduced padding)
         header = tk.Frame(card, bg=self.COLORS['bg_accent'])
@@ -6613,6 +6619,8 @@ class TradingGUI:
         content = tk.Frame(card, bg=self.COLORS['bg_secondary'])
         content.pack(fill='both', expand=True, padx=15, pady=15)
         
+        # Return both container and content for proper layout management
+        content.card_container = card_container
         return content
 
     def create_analytics_dashboard(self):
@@ -6626,25 +6634,25 @@ class TradingGUI:
         cards_row.pack(fill='x')
         
         # Trading Statistics Card (smaller)
-        stats_card = self.create_card(cards_row, "📈 Trading Statistics", width=320)
-        stats_card.pack(side='left', padx=(0, 12))
+        stats_card_content = self.create_card(cards_row, "📈 Trading Statistics", width=320)
+        stats_card_content.card_container.pack(side='left', padx=(0, 12), fill='y')
         
-        self.stats_text = tk.Text(stats_card, height=5, bg=self.COLORS['bg_accent'], 
+        self.stats_text = tk.Text(stats_card_content, height=5, bg=self.COLORS['bg_accent'], 
                                  fg=self.COLORS['text_primary'], font=('Consolas', 8),
                                  relief='flat', bd=0, wrap='word')
         self.stats_text.pack(fill='both', expand=True)
         
         # Portfolio Visualization Card (smaller)
-        portfolio_card = self.create_card(cards_row, "💼 Portfolio Overview", width=260)
-        portfolio_card.pack(side='left', padx=(0, 12))
+        portfolio_card_content = self.create_card(cards_row, "💼 Portfolio Overview", width=260)
+        portfolio_card_content.card_container.pack(side='left', padx=(0, 12), fill='y')
         
         # Mini donut chart for portfolio balance (smaller)
-        self.portfolio_canvas = tk.Canvas(portfolio_card, width=220, height=100,
+        self.portfolio_canvas = tk.Canvas(portfolio_card_content, width=220, height=100,
                                         bg=self.COLORS['bg_secondary'], highlightthickness=0)
         self.portfolio_canvas.pack(pady=8)
         
         # Portfolio metrics
-        metrics_frame = tk.Frame(portfolio_card, bg=self.COLORS['bg_secondary'])
+        metrics_frame = tk.Frame(portfolio_card_content, bg=self.COLORS['bg_secondary'])
         metrics_frame.pack(fill='x')
         
         self.buy_volume_label = ttk.Label(metrics_frame, text="BUY: 0.00", 
@@ -6656,10 +6664,10 @@ class TradingGUI:
         self.sell_volume_label.pack(side='right')
         
         # Smart Insights Card (smaller)
-        insights_card = self.create_card(cards_row, "🧠 Smart Insights", width=360)
-        insights_card.pack(side='right')
+        insights_card_content = self.create_card(cards_row, "🧠 Smart Insights", width=360)
+        insights_card_content.card_container.pack(side='right', fill='y')
         
-        self.recommendations_text = tk.Text(insights_card, height=5, 
+        self.recommendations_text = tk.Text(insights_card_content, height=5, 
                                           bg=self.COLORS['bg_accent'], 
                                           fg=self.COLORS['accent_orange'], 
                                           font=('Consolas', 8),
@@ -6673,11 +6681,11 @@ class TradingGUI:
         log_container.pack(fill='x', padx=15, pady=(8, 15))
         
         # Log card
-        log_card = self.create_large_card(log_container, "📝 System Log")
-        log_card.pack(fill='x')
+        log_card_content = self.create_large_card(log_container, "📝 System Log")
+        log_card_content.card_container.pack(fill='x')
         
         # Log controls
-        controls_frame = tk.Frame(log_card, bg=self.COLORS['bg_secondary'])
+        controls_frame = tk.Frame(log_card_content, bg=self.COLORS['bg_secondary'])
         controls_frame.pack(fill='x', pady=(0, 8))
         
         # Log level indicator
@@ -6691,7 +6699,7 @@ class TradingGUI:
         clear_btn.pack(side='right')
         
         # Enhanced log text with modern styling (reduced height)
-        log_frame = tk.Frame(log_card, bg=self.COLORS['bg_secondary'])
+        log_frame = tk.Frame(log_card_content, bg=self.COLORS['bg_secondary'])
         log_frame.pack(fill='both', expand=True)
         
         self.log_text = scrolledtext.ScrolledText(log_frame, height=6, 
@@ -6715,6 +6723,36 @@ class TradingGUI:
         self.log_text.tag_configure("INFO", foreground=self.COLORS['text_secondary'])
         self.log_text.tag_configure("DEBUG", foreground=self.COLORS['text_muted'])
         self.log_text.tag_configure("TIMESTAMP", foreground=self.COLORS['accent_blue'])
+
+    def debug_widget_hierarchy(self):
+        """Debug widget hierarchy and visibility"""
+        try:
+            print("\n🔍 DEBUG: Widget hierarchy check:")
+            
+            # Check main window children
+            root_children = self.root.winfo_children()
+            print(f"   Root has {len(root_children)} children")
+            
+            for i, child in enumerate(root_children):
+                widget_name = child.__class__.__name__
+                is_mapped = child.winfo_ismapped()
+                width = child.winfo_reqwidth()
+                height = child.winfo_reqheight()
+                print(f"   [{i}] {widget_name}: mapped={is_mapped}, size={width}x{height}")
+                
+                # Check if widget has children
+                grandchildren = child.winfo_children()
+                if grandchildren:
+                    print(f"       Has {len(grandchildren)} children")
+                    for j, grandchild in enumerate(grandchildren[:3]):  # Show first 3
+                        gc_name = grandchild.__class__.__name__
+                        gc_mapped = grandchild.winfo_ismapped()
+                        print(f"         [{j}] {gc_name}: mapped={gc_mapped}")
+                        
+            print("🔍 DEBUG: Widget hierarchy check complete\n")
+            
+        except Exception as e:
+            print(f"❌ Debug hierarchy failed: {e}")
 
     def clear_log(self):
         """Clear the log display"""
