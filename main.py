@@ -1,8 +1,26 @@
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
-import MetaTrader5 as mt5
-import pandas as pd
-import numpy as np
+
+# Safe imports with fallback for missing dependencies
+try:
+    import MetaTrader5 as mt5
+    MT5_AVAILABLE = True
+except ImportError:
+    print("WARNING: MetaTrader5 not available - running in simulation mode")
+    mt5 = None
+    MT5_AVAILABLE = False
+
+try:
+    import pandas as pd
+except ImportError:
+    print("WARNING: pandas not available - using basic data structures")
+    pd = None
+
+try:
+    import numpy as np
+except ImportError:
+    print("WARNING: numpy not available - using basic math operations")
+    np = None
 from datetime import datetime, timedelta
 import threading
 import time
@@ -172,11 +190,15 @@ class TradingSystem:
 
         # Auto-detect filling type
         self.filling_type = None
-        self.filling_types_priority = [
-            mt5.ORDER_FILLING_IOC,  # Immediate or Cancel
-            mt5.ORDER_FILLING_FOK,  # Fill or Kill  
-            mt5.ORDER_FILLING_RETURN  # Return (default)
-        ]
+        if MT5_AVAILABLE:
+            self.filling_types_priority = [
+                mt5.ORDER_FILLING_IOC,  # Immediate or Cancel
+                mt5.ORDER_FILLING_FOK,  # Fill or Kill  
+                mt5.ORDER_FILLING_RETURN  # Return (default)
+            ]
+        else:
+            # Fallback values when MT5 is not available
+            self.filling_types_priority = [0, 1, 2]  # Mock values
         
         # 🔗 Connection Health Monitoring & Circuit Breakers
         self.last_mt5_ping = None
@@ -269,8 +291,14 @@ class TradingSystem:
         self.state_file = "trading_state.json"
         self.positions_file = "positions_backup.pkl"
         
-        # โหลดสถานะเมื่อเริ่มโปรแกรม
-        self.load_trading_state()
+        # โหลดสถานะเมื่อเริ่มโปรแกรม - with safe loading
+        try:
+            self.load_trading_state()
+            print("✅ Trading state loaded successfully")
+        except Exception as e:
+            print(f"⚠️ State loading failed: {e}")
+            # Continue with default values instead of crashing
+            self.log(f"Warning: Using default state due to loading error: {e}", "WARNING")
         
         # 🛠️ Smart HG System - เพิ่มส่วนนี้
         self.smart_hg_enabled = True
@@ -344,6 +372,10 @@ class TradingSystem:
 
     def detect_broker_filling_type(self) -> int:
         """Auto-detect broker's supported filling type"""
+        if not MT5_AVAILABLE:
+            self.log("MT5 not available - using mock filling type", "WARNING")
+            return 0  # Mock value
+            
         if not self.mt5_connected:
             return mt5.ORDER_FILLING_IOC
             
@@ -378,6 +410,11 @@ class TradingSystem:
 
     def connect_mt5(self, max_retries: int = 3, retry_delay: float = 2.0) -> bool:
         """Connect to MetaTrader 5 with retry mechanism and validation"""
+        if not MT5_AVAILABLE:
+            self.log("MT5 not available - running in simulation mode", "WARNING")
+            self.mt5_connected = False
+            return False
+            
         for attempt in range(max_retries):
             try:
                 # Validate inputs
@@ -5960,7 +5997,19 @@ class TradingSystem:
 
 class TradingGUI:
     def __init__(self):
-        self.trading_system = TradingSystem()
+        # Initialize logging and error tracking
+        self.startup_errors = []
+        self.gui_components_loaded = False
+        self.fallback_mode = False
+        
+        try:
+            self.trading_system = TradingSystem()
+            print("✅ Trading system initialized successfully")
+        except Exception as e:
+            print(f"⚠️ Trading system initialization failed: {e}")
+            self.startup_errors.append(f"Trading system: {e}")
+            # Create minimal trading system fallback
+            self.trading_system = self.create_fallback_trading_system()
         
         # Modern Professional Color Scheme
         self.COLORS = {
@@ -5983,34 +6032,177 @@ class TradingGUI:
         self.connection_animation_state = 0
         self.hover_states = {}
         
-        self.setup_gui()
-        self.update_loop()
+        # Setup GUI with comprehensive error handling
+        try:
+            self.setup_gui()
+            self.gui_components_loaded = True
+            print("✅ GUI setup completed successfully")
+        except Exception as e:
+            print(f"❌ GUI setup failed: {e}")
+            self.startup_errors.append(f"GUI setup: {e}")
+            try:
+                self.setup_fallback_gui()
+                print("✅ Fallback GUI loaded")
+            except Exception as fallback_error:
+                print(f"❌ Fallback GUI also failed: {fallback_error}")
+                raise Exception(f"Complete GUI failure: {e}")
+        
+        # Start update loop only if GUI was created successfully
+        if self.gui_components_loaded or self.fallback_mode:
+            self.update_loop()
+
+    def create_fallback_trading_system(self):
+        """Create a minimal trading system fallback"""
+        class FallbackTradingSystem:
+            def __init__(self):
+                self.mt5_connected = False
+                self.buy_volume = 0.0
+                self.sell_volume = 0.0
+                self.net_profit = 0.0
+                self.total_trades = 0
+                self.root = None
+                
+            def log(self, message, level="INFO"):
+                print(f"[{level}] {message}")
+                
+            def update_positions(self):
+                pass
+                
+        return FallbackTradingSystem()
 
     def setup_gui(self):
-        """Setup the modern professional GUI"""
+        """Setup the modern professional GUI with comprehensive error handling"""
+        try:
+            print("🔄 Starting GUI initialization...")
+            
+            # Create main window
+            self.root = tk.Tk()
+            self.root.title("🏆 Modern AI Gold Grid Trading System v3.0")
+            self.root.geometry("1600x1000")
+            self.root.configure(bg=self.COLORS['bg_primary'])
+            self.root.minsize(1200, 800)  # Responsive minimum size
+            print("✅ Main window created")
+            
+            # Modern Style Configuration
+            try:
+                self.setup_modern_styles()
+                print("✅ Modern styles configured")
+            except Exception as e:
+                print(f"⚠️ Style configuration failed: {e}")
+                self.startup_errors.append(f"Styles: {e}")
+            
+            # Create modern layout with cards - each with individual error handling
+            component_success = 0
+            total_components = 5
+            
+            try:
+                self.create_modern_header()
+                component_success += 1
+                print("✅ Header created")
+            except Exception as e:
+                print(f"⚠️ Header creation failed: {e}")
+                self.startup_errors.append(f"Header: {e}")
+                
+            try:
+                self.create_control_cards()
+                component_success += 1
+                print("✅ Control cards created")
+            except Exception as e:
+                print(f"⚠️ Control cards creation failed: {e}")
+                self.startup_errors.append(f"Control cards: {e}")
+                
+            try:
+                self.create_data_section()
+                component_success += 1
+                print("✅ Data section created")
+            except Exception as e:
+                print(f"⚠️ Data section creation failed: {e}")
+                self.startup_errors.append(f"Data section: {e}")
+                
+            try:
+                self.create_analytics_dashboard()
+                component_success += 1
+                print("✅ Analytics dashboard created")
+            except Exception as e:
+                print(f"⚠️ Analytics dashboard creation failed: {e}")
+                self.startup_errors.append(f"Analytics: {e}")
+                
+            try:
+                self.create_log_panel()
+                component_success += 1
+                print("✅ Log panel created")
+            except Exception as e:
+                print(f"⚠️ Log panel creation failed: {e}")
+                self.startup_errors.append(f"Log panel: {e}")
+            
+            print(f"📊 GUI Components loaded: {component_success}/{total_components}")
+            
+            # Connect trading system to root
+            if hasattr(self.trading_system, 'root'):
+                self.trading_system.root = self.root
+            
+            # Show startup status
+            if self.startup_errors:
+                self.show_startup_status()
+            
+            # Auto-scan for terminals after GUI is fully loaded (increased delay)
+            self.root.after(5000, self.safe_auto_scan_terminals)
+            
+            # Start animation timers with reduced frequency
+            try:
+                self.start_status_animations()
+                print("✅ Status animations started")
+            except Exception as e:
+                print(f"⚠️ Animation startup failed: {e}")
+                
+        except Exception as e:
+            print(f"❌ Critical GUI setup failure: {e}")
+            raise
+
+    def setup_fallback_gui(self):
+        """Setup a basic fallback GUI when modern GUI fails"""
+        print("🔄 Setting up fallback GUI...")
+        self.fallback_mode = True
+        
         self.root = tk.Tk()
-        self.root.title("🏆 Modern AI Gold Grid Trading System v3.0")
-        self.root.geometry("1600x1000")
-        self.root.configure(bg=self.COLORS['bg_primary'])
-        self.root.minsize(1200, 800)  # Responsive minimum size
+        self.root.title("Trading System - Basic Mode")
+        self.root.geometry("800x600")
+        self.root.configure(bg='#f0f0f0')
         
-        # Modern Style Configuration
-        self.setup_modern_styles()
+        # Simple header
+        header = tk.Label(self.root, text="Trading System - Basic Mode", 
+                         font=('Arial', 16, 'bold'), bg='#f0f0f0')
+        header.pack(pady=20)
         
-        # Create modern layout with cards
-        self.create_modern_header()
-        self.create_control_cards()
-        self.create_data_section()
-        self.create_analytics_dashboard()
-        self.create_log_panel()
+        # Status display
+        status_frame = tk.Frame(self.root, bg='#f0f0f0')
+        status_frame.pack(fill='x', padx=20, pady=10)
         
-        self.trading_system.root = self.root
+        self.fallback_status = tk.Label(status_frame, text="System Status: Basic Mode Active", 
+                                       font=('Arial', 12), bg='#f0f0f0')
+        self.fallback_status.pack()
         
-        # Auto-scan for terminals on startup (after longer delay to ensure GUI is ready)
-        self.root.after(3000, self.auto_scan_terminals)
+        # Error display
+        if self.startup_errors:
+            error_frame = tk.LabelFrame(self.root, text="Startup Issues", bg='#f0f0f0')
+            error_frame.pack(fill='both', expand=True, padx=20, pady=10)
+            
+            error_text = scrolledtext.ScrolledText(error_frame, height=15)
+            error_text.pack(fill='both', expand=True, padx=10, pady=10)
+            
+            for error in self.startup_errors:
+                error_text.insert(tk.END, f"• {error}\n")
+            
+            error_text.config(state='disabled')
         
-        # Start animation timers with reduced frequency
-        self.start_status_animations()
+        # Basic controls
+        control_frame = tk.Frame(self.root, bg='#f0f0f0')
+        control_frame.pack(fill='x', padx=20, pady=10)
+        
+        tk.Button(control_frame, text="Retry Full GUI", 
+                 command=self.retry_full_gui).pack(side='left', padx=5)
+        tk.Button(control_frame, text="Exit", 
+                 command=self.root.quit).pack(side='right', padx=5)
 
     def setup_modern_styles(self):
         """Configure modern professional styles"""
@@ -7220,6 +7412,53 @@ Balance Ratio: {(self.trading_system.buy_volume/(max(0.01, self.trading_system.b
         # Schedule next update (reduced frequency for better stability)
         self.root.after(2500, self.update_loop)
 
+    def show_startup_status(self):
+        """Show startup status and errors to user"""
+        try:
+            # Create a status message
+            error_count = len(self.startup_errors)
+            if error_count > 0:
+                status_msg = f"⚠️ GUI loaded with {error_count} warning(s). Check logs for details."
+                if hasattr(self, 'trading_system') and hasattr(self.trading_system, 'log'):
+                    self.trading_system.log(status_msg, "WARNING")
+                    for error in self.startup_errors:
+                        self.trading_system.log(f"Startup warning: {error}", "WARNING")
+        except Exception as e:
+            print(f"Error showing startup status: {e}")
+
+    def safe_auto_scan_terminals(self):
+        """Safely auto-scan terminals without blocking GUI"""
+        try:
+            print("🔄 Starting safe auto-scan for terminals...")
+            if hasattr(self, 'auto_scan_terminals'):
+                # Run in a separate thread to avoid blocking
+                import threading
+                scan_thread = threading.Thread(target=self.auto_scan_terminals, daemon=True)
+                scan_thread.start()
+                print("✅ Auto-scan started in background thread")
+            else:
+                print("⚠️ Auto-scan method not available")
+        except Exception as e:
+            print(f"⚠️ Auto-scan failed: {e}")
+            if hasattr(self, 'trading_system') and hasattr(self.trading_system, 'log'):
+                self.trading_system.log(f"Auto-scan error: {e}", "ERROR")
+
+    def retry_full_gui(self):
+        """Retry loading the full GUI from fallback mode"""
+        try:
+            self.root.destroy()
+            self.startup_errors = []
+            self.gui_components_loaded = False
+            self.fallback_mode = False
+            
+            # Reinitialize
+            self.setup_gui()
+            self.gui_components_loaded = True
+            messagebox.showinfo("Success", "Full GUI loaded successfully!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load full GUI: {e}")
+            self.setup_fallback_gui()
+
     def run(self):
         """Start the modern GUI application"""
         self.trading_system.log("🏆 Modern AI Gold Grid Trading System v3.0 Started")
@@ -7228,13 +7467,40 @@ Balance Ratio: {(self.trading_system.buy_volume/(max(0.01, self.trading_system.b
         self.root.mainloop()
 
 def main():
-    """Main application entry point"""
+    """Main application entry point with comprehensive error handling"""
+    print("🚀 Starting Huakuy Trading System...")
+    print(f"📦 MT5 Available: {MT5_AVAILABLE}")
+    print(f"📦 Pandas Available: {pd is not None}")
+    print(f"📦 NumPy Available: {np is not None}")
+    
     try:
+        print("🔄 Creating GUI application...")
         app = TradingGUI()
+        
+        print("🎯 Starting application main loop...")
         app.run()
+        
+    except ImportError as e:
+        error_msg = f"Missing required dependency: {str(e)}"
+        print(f"❌ {error_msg}")
+        try:
+            messagebox.showerror("Dependency Error", error_msg)
+        except:
+            print("Could not show error dialog - tkinter may not be available")
+            
     except Exception as e:
-        print(f"Application error: {str(e)}")
-        messagebox.showerror("Critical Error", f"Application failed to start: {str(e)}")
+        error_msg = f"Application failed to start: {str(e)}"
+        print(f"❌ {error_msg}")
+        print("📊 Error details:")
+        import traceback
+        traceback.print_exc()
+        
+        try:
+            messagebox.showerror("Critical Error", error_msg)
+        except:
+            print("Could not show error dialog")
+    
+    print("🏁 Application terminated")
 
 if __name__ == "__main__":
     main()
