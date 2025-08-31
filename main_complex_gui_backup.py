@@ -5961,178 +5961,923 @@ class TradingSystem:
 class TradingGUI:
     def __init__(self):
         self.trading_system = TradingSystem()
+        
+        # Modern Professional Color Scheme
+        self.COLORS = {
+            'bg_primary': '#1a1a1a',     # Main background
+            'bg_secondary': '#2d2d2d',   # Card backgrounds
+            'bg_accent': '#3a3a3a',      # Button/component backgrounds
+            'accent_blue': '#0078d4',    # Primary action color
+            'accent_green': '#107c10',   # Success/profit color
+            'accent_red': '#d13438',     # Error/loss color
+            'accent_orange': '#ff8c00',  # Warning color
+            'text_primary': '#ffffff',   # Primary text
+            'text_secondary': '#cccccc', # Secondary text
+            'text_muted': '#999999',     # Muted text
+            'border': '#404040',         # Borders and separators
+            'hover': '#4a4a4a',          # Hover states
+            'card_shadow': '#0f0f0f'     # Card shadow effect
+        }
+        
+        # Animation and status tracking
+        self.connection_animation_state = 0
+        self.hover_states = {}
+        
         self.setup_gui()
         self.update_loop()
 
     def setup_gui(self):
-        """Setup simple, reliable GUI"""
+        """Setup the modern professional GUI"""
         self.root = tk.Tk()
-        self.root.title("AI Gold Grid Trading System v3.0 - Simplified")
-        self.root.geometry("1000x700")
+        self.root.title("🏆 Modern AI Gold Grid Trading System v3.0")
+        self.root.geometry("1600x1000")
+        self.root.configure(bg=self.COLORS['bg_primary'])
+        self.root.minsize(1200, 800)  # Responsive minimum size
         
-        # Simple header
-        header_frame = tk.Frame(self.root)
-        header_frame.pack(fill='x', padx=10, pady=5)
+        # Modern Style Configuration
+        self.setup_modern_styles()
         
-        title_label = tk.Label(header_frame, text="AI Gold Grid Trading System v3.0", 
-                              font=('Arial', 14, 'bold'))
-        title_label.pack(side='left')
-        
-        self.connection_status = tk.Label(header_frame, text="Disconnected", 
-                                        fg='red', font=('Arial', 10, 'bold'))
-        self.connection_status.pack(side='right')
-        
-        # Control panel
-        control_frame = tk.Frame(self.root)
-        control_frame.pack(fill='x', padx=10, pady=5)
-        
-        # Connection controls
-        conn_frame = tk.LabelFrame(control_frame, text="Connection", padx=5, pady=5)
-        conn_frame.pack(side='left', padx=(0, 10))
-        
-        self.connect_btn = tk.Button(conn_frame, text="Connect MT5", command=self.connect_mt5)
-        self.connect_btn.pack(side='left', padx=2)
-        
-        self.disconnect_btn = tk.Button(conn_frame, text="Disconnect", command=self.disconnect_mt5)
-        self.disconnect_btn.pack(side='left', padx=2)
-        
-        # Terminal controls
-        terminal_frame = tk.LabelFrame(control_frame, text="Terminal", padx=5, pady=5)
-        terminal_frame.pack(side='left', padx=(0, 10))
-        
-        self.scan_btn = tk.Button(terminal_frame, text="Scan Terminals", command=self.scan_terminals)
-        self.scan_btn.pack(side='left', padx=2)
-        
-        self.terminal_var = tk.StringVar()
-        self.terminal_combobox = ttk.Combobox(terminal_frame, textvariable=self.terminal_var, 
-                                            state='readonly', width=25)
-        self.terminal_combobox.pack(side='left', padx=2)
-        self.terminal_combobox.bind('<<ComboboxSelected>>', self.on_terminal_selected)
-        
-        # Trading controls
-        trading_frame = tk.LabelFrame(control_frame, text="Trading", padx=5, pady=5)
-        trading_frame.pack(side='left')
-        
-        self.start_btn = tk.Button(trading_frame, text="Start Trading", command=self.start_trading)
-        self.start_btn.pack(side='left', padx=2)
-        
-        self.stop_btn = tk.Button(trading_frame, text="Stop Trading", command=self.stop_trading)
-        self.stop_btn.pack(side='left', padx=2)
-        
-        # Status info
-        status_frame = tk.Frame(self.root)
-        status_frame.pack(fill='x', padx=10, pady=5)
-        
-        self.terminal_info_label = tk.Label(status_frame, text="Click 'Scan Terminals' to find MT5 terminals")
-        self.terminal_info_label.pack(side='left')
-        
-        # Positions display
-        pos_frame = tk.LabelFrame(self.root, text="Positions")
-        pos_frame.pack(fill='both', expand=True, padx=10, pady=5)
-        
-        # Create Treeview for positions
-        self.positions_tree = ttk.Treeview(pos_frame, columns=('Symbol', 'Type', 'Volume', 'Price', 'Profit'), show='headings')
-        self.positions_tree.heading('Symbol', text='Symbol')
-        self.positions_tree.heading('Type', text='Type')
-        self.positions_tree.heading('Volume', text='Volume')
-        self.positions_tree.heading('Price', text='Price')
-        self.positions_tree.heading('Profit', text='Profit')
-        
-        pos_scrollbar = ttk.Scrollbar(pos_frame, orient='vertical', command=self.positions_tree.yview)
-        self.positions_tree.configure(yscrollcommand=pos_scrollbar.set)
-        
-        self.positions_tree.pack(side='left', fill='both', expand=True)
-        pos_scrollbar.pack(side='right', fill='y')
-        
-        # Stats
-        stats_frame = tk.Frame(self.root)
-        stats_frame.pack(fill='x', padx=10, pady=5)
-        
-        self.stats_label = tk.Label(stats_frame, text="Stats: No positions", font=('Arial', 9))
-        self.stats_label.pack(side='left')
-        
-        # Log display
-        log_frame = tk.LabelFrame(self.root, text="Log")
-        log_frame.pack(fill='both', expand=True, padx=10, pady=5)
-        
-        self.log_display = scrolledtext.ScrolledText(log_frame, height=8, font=('Courier', 9))
-        self.log_display.pack(fill='both', expand=True)
+        # Create modern layout with cards
+        self.create_modern_header()
+        self.create_control_cards()
+        self.create_data_section()
+        self.create_analytics_dashboard()
+        self.create_log_panel()
         
         self.trading_system.root = self.root
+        
+        # Auto-scan for terminals on startup (after longer delay to ensure GUI is ready)
+        self.root.after(3000, self.auto_scan_terminals)
+        
+        # Start animation timers with reduced frequency
+        self.start_status_animations()
 
-    def connect_mt5(self):
-        """Connect to MT5"""
-        success = self.trading_system.connect_mt5()
-        if success:
-            self.connection_status.configure(text="Connected", fg='green')
-            messagebox.showinfo("Success", "Connected to MT5")
+    def setup_modern_styles(self):
+        """Configure modern professional styles"""
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Configure modern button styles
+        style.configure('Modern.TButton', 
+                       font=('Segoe UI', 9, 'bold'),
+                       borderwidth=0,
+                       focuscolor='none',
+                       background=self.COLORS['accent_blue'],
+                       foreground=self.COLORS['text_primary'])
+        
+        style.map('Modern.TButton',
+                 background=[('active', '#106ebe'),
+                           ('pressed', '#005a9e')])
+        
+        # Success button style
+        style.configure('Success.TButton',
+                       font=('Segoe UI', 9, 'bold'),
+                       borderwidth=0,
+                       focuscolor='none',
+                       background=self.COLORS['accent_green'],
+                       foreground=self.COLORS['text_primary'])
+        
+        style.map('Success.TButton',
+                 background=[('active', '#0e6e0e'),
+                           ('pressed', '#0c5a0c')])
+        
+        # Danger button style
+        style.configure('Danger.TButton',
+                       font=('Segoe UI', 9, 'bold'),
+                       borderwidth=0,
+                       focuscolor='none',
+                       background=self.COLORS['accent_red'],
+                       foreground=self.COLORS['text_primary'])
+        
+        style.map('Danger.TButton',
+                 background=[('active', '#b82d32'),
+                           ('pressed', '#9e262a')])
+        
+        # Modern labels
+        style.configure('ModernTitle.TLabel',
+                       font=('Segoe UI', 18, 'bold'),
+                       background=self.COLORS['bg_primary'],
+                       foreground=self.COLORS['text_primary'])
+        
+        style.configure('CardTitle.TLabel',
+                       font=('Segoe UI', 12, 'bold'),
+                       background=self.COLORS['bg_secondary'],
+                       foreground=self.COLORS['text_primary'])
+        
+        style.configure('Status.TLabel',
+                       font=('Segoe UI', 10),
+                       background=self.COLORS['bg_secondary'],
+                       foreground=self.COLORS['text_secondary'])
+        
+        style.configure('Success.TLabel',
+                       font=('Segoe UI', 10, 'bold'),
+                       background=self.COLORS['bg_secondary'],
+                       foreground=self.COLORS['accent_green'])
+        
+        style.configure('Error.TLabel',
+                       font=('Segoe UI', 10, 'bold'),
+                       background=self.COLORS['bg_secondary'],
+                       foreground=self.COLORS['accent_red'])
+        
+        # Modern combobox
+        style.configure('Modern.TCombobox',
+                       font=('Segoe UI', 9),
+                       borderwidth=1,
+                       relief='solid',
+                       background=self.COLORS['bg_accent'],
+                       foreground=self.COLORS['text_primary'])
+        
+        # Modern treeview
+        style.configure('Modern.Treeview',
+                       font=('Segoe UI', 9),
+                       background=self.COLORS['bg_secondary'],
+                       foreground=self.COLORS['text_primary'],
+                       fieldbackground=self.COLORS['bg_secondary'],
+                       borderwidth=0)
+        
+        style.configure('Modern.Treeview.Heading',
+                       font=('Segoe UI', 10, 'bold'),
+                       background=self.COLORS['bg_accent'],
+                       foreground=self.COLORS['text_primary'],
+                       borderwidth=1,
+                       relief='solid')
+
+    def create_modern_header(self):
+        """Create modern header with app title, version, and animated connection status"""
+        # Header card container
+        header_container = tk.Frame(self.root, bg=self.COLORS['bg_primary'])
+        header_container.pack(fill='x', padx=20, pady=(20, 10))
+        
+        # Main header card
+        header_card = tk.Frame(header_container, bg=self.COLORS['bg_secondary'], 
+                              relief='flat', bd=0)
+        header_card.pack(fill='x')
+        
+        # Add shadow effect
+        shadow_frame = tk.Frame(header_container, bg=self.COLORS['card_shadow'], height=3)
+        shadow_frame.pack(fill='x')
+        
+        # Header content
+        header_content = tk.Frame(header_card, bg=self.COLORS['bg_secondary'])
+        header_content.pack(fill='x', padx=25, pady=20)
+        
+        # Left side - Title and version
+        title_frame = tk.Frame(header_content, bg=self.COLORS['bg_secondary'])
+        title_frame.pack(side='left')
+        
+        title_label = ttk.Label(title_frame, text="🏆 Modern AI Gold Grid Trading System", 
+                               style='ModernTitle.TLabel')
+        title_label.pack(anchor='w')
+        
+        version_label = ttk.Label(title_frame, text="v3.0 Professional Edition", 
+                                style='Status.TLabel')
+        version_label.pack(anchor='w', pady=(5, 0))
+        
+        # Right side - Connection status with animated indicator
+        status_frame = tk.Frame(header_content, bg=self.COLORS['bg_secondary'])
+        status_frame.pack(side='right')
+        
+        # Animated connection indicator
+        self.connection_indicator = tk.Canvas(status_frame, width=20, height=20, 
+                                            bg=self.COLORS['bg_secondary'], 
+                                            highlightthickness=0)
+        self.connection_indicator.pack(side='left', padx=(0, 10))
+        
+        self.connection_status = ttk.Label(status_frame, text="Disconnected", 
+                                         style='Error.TLabel', font=('Segoe UI', 12, 'bold'))
+        self.connection_status.pack(side='left')
+        
+        # Initialize connection indicator
+        self.update_connection_indicator(False)
+
+    def create_control_cards(self):
+        """Create modern control panel with card-based layout"""
+        # Control cards container
+        control_container = tk.Frame(self.root, bg=self.COLORS['bg_primary'])
+        control_container.pack(fill='x', padx=20, pady=10)
+        
+        # First row of cards
+        cards_row1 = tk.Frame(control_container, bg=self.COLORS['bg_primary'])
+        cards_row1.pack(fill='x', pady=(0, 10))
+        
+        # Connection Control Card
+        self.create_connection_card(cards_row1)
+        
+        # Terminal Selection Card
+        self.create_terminal_card(cards_row1)
+        
+        # Trading Control Card
+        self.create_trading_card(cards_row1)
+        
+        # Live Stats Card
+        self.create_live_stats_card(cards_row1)
+
+    def create_connection_card(self, parent):
+        """Create connection control card"""
+        card = self.create_card(parent, "🔌 Connection", width=280)
+        card.pack(side='left', padx=(0, 15))
+        
+        # Connection buttons with modern styling
+        btn_frame = tk.Frame(card, bg=self.COLORS['bg_secondary'])
+        btn_frame.pack(fill='x', pady=10)
+        
+        self.connect_btn = ttk.Button(btn_frame, text="🔌 Connect MT5", 
+                                     command=self.connect_mt5, style='Modern.TButton')
+        self.connect_btn.pack(side='left', padx=(0, 10), fill='x', expand=True)
+        
+        self.disconnect_btn = ttk.Button(btn_frame, text="🔌 Disconnect", 
+                                        command=self.disconnect_mt5, style='Danger.TButton')
+        self.disconnect_btn.pack(side='right', fill='x', expand=True)
+
+    def create_terminal_card(self, parent):
+        """Create terminal selection card"""
+        card = self.create_card(parent, "🖥️ Terminal Selection", width=320)
+        card.pack(side='left', padx=(0, 15))
+        
+        # Scan buttons
+        btn_frame = tk.Frame(card, bg=self.COLORS['bg_secondary'])
+        btn_frame.pack(fill='x', pady=(0, 10))
+        
+        self.scan_btn = ttk.Button(btn_frame, text="🔍 Scan", 
+                                  command=self.scan_terminals, style='Modern.TButton')
+        self.scan_btn.pack(side='left', padx=(0, 8), fill='x', expand=True)
+        
+        self.refresh_btn = ttk.Button(btn_frame, text="🔄 Refresh", 
+                                     command=self.refresh_terminals, style='Modern.TButton')
+        self.refresh_btn.pack(side='right', fill='x', expand=True)
+        
+        # Terminal selection dropdown
+        self.terminal_var = tk.StringVar()
+        self.terminal_combobox = ttk.Combobox(card, textvariable=self.terminal_var, 
+                                            state='readonly', style='Modern.TCombobox',
+                                            font=('Segoe UI', 9))
+        self.terminal_combobox.pack(fill='x', pady=(0, 8))
+        self.terminal_combobox.bind('<<ComboboxSelected>>', self.on_terminal_selected)
+        
+        # Terminal info with modern styling
+        self.terminal_info_label = ttk.Label(card, text="Click 'Scan' to find terminals", 
+                                           style='Status.TLabel', font=('Segoe UI', 9))
+        self.terminal_info_label.pack(fill='x')
+
+    def create_trading_card(self, parent):
+        """Create trading control card"""
+        card = self.create_card(parent, "▶️ Trading Control", width=280)
+        card.pack(side='left', padx=(0, 15))
+        
+        # Trading buttons
+        btn_frame = tk.Frame(card, bg=self.COLORS['bg_secondary'])
+        btn_frame.pack(fill='x', pady=10)
+        
+        self.start_btn = ttk.Button(btn_frame, text="▶️ Start Trading", 
+                                   command=self.start_trading, style='Success.TButton')
+        self.start_btn.pack(side='left', padx=(0, 10), fill='x', expand=True)
+        
+        self.stop_btn = ttk.Button(btn_frame, text="⏹️ Stop Trading", 
+                                  command=self.stop_trading, style='Danger.TButton')
+        self.stop_btn.pack(side='right', fill='x', expand=True)
+
+    def create_live_stats_card(self, parent):
+        """Create live statistics card"""
+        card = self.create_card(parent, "📊 Live Stats", width=300)
+        card.pack(side='right')
+        
+        # Portfolio health with progress indicator
+        health_frame = tk.Frame(card, bg=self.COLORS['bg_secondary'])
+        health_frame.pack(fill='x', pady=(0, 8))
+        
+        self.portfolio_label = ttk.Label(health_frame, text="💼 Portfolio Health", 
+                                        style='Status.TLabel')
+        self.portfolio_label.pack(anchor='w')
+        
+        # Health progress bar
+        self.health_canvas = tk.Canvas(health_frame, width=250, height=8,
+                                     bg=self.COLORS['bg_accent'], highlightthickness=0)
+        self.health_canvas.pack(fill='x', pady=(5, 0))
+        
+        # Volume balance with visual indicator
+        volume_frame = tk.Frame(card, bg=self.COLORS['bg_secondary'])
+        volume_frame.pack(fill='x')
+        
+        self.volume_label = ttk.Label(volume_frame, text="⚖️ Volume Balance", 
+                                     style='Status.TLabel')
+        self.volume_label.pack(anchor='w')
+        
+        # Volume visualization
+        self.volume_canvas = tk.Canvas(volume_frame, width=250, height=30,
+                                     bg=self.COLORS['bg_accent'], highlightthickness=0)
+        self.volume_canvas.pack(fill='x', pady=(5, 0))
+
+    def create_card(self, parent, title, width=None, height=None):
+        """Create a modern card container with shadow effect"""
+        # Card container with shadow
+        card_container = tk.Frame(parent, bg=self.COLORS['bg_primary'])
+        if width:
+            card_container.configure(width=width)
+        if height:
+            card_container.configure(height=height)
+        
+        # Shadow effect
+        shadow = tk.Frame(card_container, bg=self.COLORS['card_shadow'], height=3)
+        shadow.pack(side='bottom', fill='x')
+        
+        # Main card
+        card = tk.Frame(card_container, bg=self.COLORS['bg_secondary'], 
+                       relief='flat', bd=0)
+        card.pack(fill='both', expand=True)
+        
+        # Card header
+        header = tk.Frame(card, bg=self.COLORS['bg_accent'])
+        header.pack(fill='x')
+        
+        title_label = ttk.Label(header, text=title, style='CardTitle.TLabel')
+        title_label.pack(side='left', padx=15, pady=10)
+        
+        # Card content area
+        content = tk.Frame(card, bg=self.COLORS['bg_secondary'])
+        content.pack(fill='both', expand=True, padx=15, pady=15)
+        
+        return content
+
+    def create_data_section(self):
+        """Create modern data section with enhanced positions table"""
+        # Data section container
+        data_container = tk.Frame(self.root, bg=self.COLORS['bg_primary'])
+        data_container.pack(fill='both', expand=True, padx=20, pady=10)
+        
+        # Positions card
+        positions_card = self.create_large_card(data_container, "📊 Active Positions")
+        positions_card.pack(fill='both', expand=True)
+        
+        # Positions toolbar
+        toolbar = tk.Frame(positions_card, bg=self.COLORS['bg_secondary'])
+        toolbar.pack(fill='x', pady=(0, 10))
+        
+        # Position count indicator
+        self.pos_count_label = ttk.Label(toolbar, text="Positions: 0/50", 
+                                        style='Status.TLabel')
+        self.pos_count_label.pack(side='left')
+        
+        # Filter buttons
+        filter_frame = tk.Frame(toolbar, bg=self.COLORS['bg_secondary'])
+        filter_frame.pack(side='right')
+        
+        # Create modern treeview for positions
+        tree_frame = tk.Frame(positions_card, bg=self.COLORS['bg_secondary'])
+        tree_frame.pack(fill='both', expand=True)
+        
+        # Enhanced columns with better organization
+        columns = ('Ticket', 'Type', 'Volume', 'Open Price', 'Current Price', 
+                  'Profit $', '$/Lot', 'Role', 'Efficiency', 'Status')
+        
+        self.positions_tree = ttk.Treeview(tree_frame, columns=columns, show='headings', 
+                                         style='Modern.Treeview', height=12)
+        
+        # Configure columns with proper widths and alignment
+        column_configs = {
+            'Ticket': {'width': 80, 'anchor': 'center'},
+            'Type': {'width': 60, 'anchor': 'center'},
+            'Volume': {'width': 80, 'anchor': 'center'},
+            'Open Price': {'width': 90, 'anchor': 'e'},
+            'Current Price': {'width': 90, 'anchor': 'e'},
+            'Profit $': {'width': 90, 'anchor': 'e'},
+            '$/Lot': {'width': 80, 'anchor': 'e'},
+            'Role': {'width': 80, 'anchor': 'center'},
+            'Efficiency': {'width': 90, 'anchor': 'center'},
+            'Status': {'width': 80, 'anchor': 'center'}
+        }
+        
+        for col in columns:
+            config = column_configs[col]
+            self.positions_tree.heading(col, text=col, anchor='center')
+            self.positions_tree.column(col, width=config['width'], 
+                                     anchor=config['anchor'], minwidth=60)
+        
+        # Modern scrollbars
+        v_scrollbar = ttk.Scrollbar(tree_frame, orient='vertical', 
+                                   command=self.positions_tree.yview)
+        h_scrollbar = ttk.Scrollbar(tree_frame, orient='horizontal', 
+                                   command=self.positions_tree.xview)
+        
+        self.positions_tree.configure(yscrollcommand=v_scrollbar.set, 
+                                    xscrollcommand=h_scrollbar.set)
+        
+        # Pack treeview and scrollbars
+        self.positions_tree.grid(row=0, column=0, sticky='nsew')
+        v_scrollbar.grid(row=0, column=1, sticky='ns')
+        h_scrollbar.grid(row=1, column=0, sticky='ew')
+        
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
+        
+        # Configure alternating row colors
+        self.positions_tree.tag_configure("oddrow", background=self.COLORS['bg_secondary'])
+        self.positions_tree.tag_configure("evenrow", background=self.COLORS['bg_accent'])
+        
+        # Configure efficiency tags with modern colors
+        self.positions_tree.tag_configure("excellent", 
+                                        background=self.COLORS['accent_green'], 
+                                        foreground=self.COLORS['text_primary'])
+        self.positions_tree.tag_configure("good", 
+                                        background='#2d5a2d', 
+                                        foreground=self.COLORS['text_primary'])
+        self.positions_tree.tag_configure("fair", 
+                                        background='#5a5a2d', 
+                                        foreground=self.COLORS['text_primary'])
+        self.positions_tree.tag_configure("poor", 
+                                        background=self.COLORS['accent_red'], 
+                                        foreground=self.COLORS['text_primary'])
+
+    def create_large_card(self, parent, title):
+        """Create a large card for major sections"""
+        # Card container
+        card_container = tk.Frame(parent, bg=self.COLORS['bg_primary'])
+        
+        # Shadow effect
+        shadow = tk.Frame(card_container, bg=self.COLORS['card_shadow'], height=3)
+        shadow.pack(side='bottom', fill='x')
+        
+        # Main card
+        card = tk.Frame(card_container, bg=self.COLORS['bg_secondary'], 
+                       relief='flat', bd=0)
+        card.pack(fill='both', expand=True)
+        
+        # Card header with modern styling
+        header = tk.Frame(card, bg=self.COLORS['bg_accent'])
+        header.pack(fill='x')
+        
+        title_label = ttk.Label(header, text=title, style='CardTitle.TLabel',
+                               font=('Segoe UI', 14, 'bold'))
+        title_label.pack(side='left', padx=20, pady=12)
+        
+        # Card content area
+        content = tk.Frame(card, bg=self.COLORS['bg_secondary'])
+        content.pack(fill='both', expand=True, padx=20, pady=20)
+        
+        return content
+
+    def create_analytics_dashboard(self):
+        """Create modern analytics dashboard with cards and visualizations"""
+        # Analytics container
+        analytics_container = tk.Frame(self.root, bg=self.COLORS['bg_primary'])
+        analytics_container.pack(fill='x', padx=20, pady=10)
+        
+        # Analytics cards row
+        cards_row = tk.Frame(analytics_container, bg=self.COLORS['bg_primary'])
+        cards_row.pack(fill='x')
+        
+        # Trading Statistics Card
+        stats_card = self.create_card(cards_row, "📈 Trading Statistics", width=380)
+        stats_card.pack(side='left', padx=(0, 15))
+        
+        self.stats_text = tk.Text(stats_card, height=6, bg=self.COLORS['bg_accent'], 
+                                 fg=self.COLORS['text_primary'], font=('Consolas', 9),
+                                 relief='flat', bd=0, wrap='word')
+        self.stats_text.pack(fill='both', expand=True)
+        
+        # Portfolio Visualization Card
+        portfolio_card = self.create_card(cards_row, "💼 Portfolio Overview", width=300)
+        portfolio_card.pack(side='left', padx=(0, 15))
+        
+        # Mini donut chart for portfolio balance
+        self.portfolio_canvas = tk.Canvas(portfolio_card, width=250, height=120,
+                                        bg=self.COLORS['bg_secondary'], highlightthickness=0)
+        self.portfolio_canvas.pack(pady=10)
+        
+        # Portfolio metrics
+        metrics_frame = tk.Frame(portfolio_card, bg=self.COLORS['bg_secondary'])
+        metrics_frame.pack(fill='x')
+        
+        self.buy_volume_label = ttk.Label(metrics_frame, text="BUY: 0.00", 
+                                        style='Success.TLabel')
+        self.buy_volume_label.pack(side='left')
+        
+        self.sell_volume_label = ttk.Label(metrics_frame, text="SELL: 0.00", 
+                                         style='Error.TLabel')
+        self.sell_volume_label.pack(side='right')
+        
+        # Smart Insights Card
+        insights_card = self.create_card(cards_row, "🧠 Smart Insights", width=420)
+        insights_card.pack(side='right')
+        
+        self.recommendations_text = tk.Text(insights_card, height=6, 
+                                          bg=self.COLORS['bg_accent'], 
+                                          fg=self.COLORS['accent_orange'], 
+                                          font=('Consolas', 9),
+                                          relief='flat', bd=0, wrap='word')
+        self.recommendations_text.pack(fill='both', expand=True)
+
+    def create_log_panel(self):
+        """Create modern log panel with syntax highlighting"""
+        # Log container
+        log_container = tk.Frame(self.root, bg=self.COLORS['bg_primary'])
+        log_container.pack(fill='x', padx=20, pady=(10, 20))
+        
+        # Log card
+        log_card = self.create_large_card(log_container, "📝 System Log")
+        log_card.pack(fill='x')
+        
+        # Log controls
+        controls_frame = tk.Frame(log_card, bg=self.COLORS['bg_secondary'])
+        controls_frame.pack(fill='x', pady=(0, 10))
+        
+        # Log level indicator
+        self.log_level_label = ttk.Label(controls_frame, text="Log Level: INFO", 
+                                       style='Status.TLabel')
+        self.log_level_label.pack(side='left')
+        
+        # Clear log button
+        clear_btn = ttk.Button(controls_frame, text="🗑️ Clear Log", 
+                              command=self.clear_log, style='Modern.TButton')
+        clear_btn.pack(side='right')
+        
+        # Enhanced log text with modern styling
+        log_frame = tk.Frame(log_card, bg=self.COLORS['bg_secondary'])
+        log_frame.pack(fill='both', expand=True)
+        
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=8, 
+                                                bg=self.COLORS['bg_accent'], 
+                                                fg=self.COLORS['text_primary'],
+                                                font=('Consolas', 9),
+                                                relief='flat', bd=0,
+                                                wrap='word')
+        self.log_text.pack(fill='both', expand=True)
+        
+        # Configure log text tags for syntax highlighting
+        self.setup_log_highlighting()
+
+    def setup_log_highlighting(self):
+        """Setup syntax highlighting for log messages"""
+        # Configure tags for different log levels and content
+        self.log_text.tag_configure("ERROR", foreground=self.COLORS['accent_red'], 
+                                  font=('Consolas', 9, 'bold'))
+        self.log_text.tag_configure("WARNING", foreground=self.COLORS['accent_orange'])
+        self.log_text.tag_configure("SUCCESS", foreground=self.COLORS['accent_green'])
+        self.log_text.tag_configure("INFO", foreground=self.COLORS['text_secondary'])
+        self.log_text.tag_configure("DEBUG", foreground=self.COLORS['text_muted'])
+        self.log_text.tag_configure("TIMESTAMP", foreground=self.COLORS['accent_blue'])
+
+    def clear_log(self):
+        """Clear the log display"""
+        self.log_text.delete(1.0, tk.END)
+        self.trading_system.log("Log cleared by user", "INFO")
+
+    def start_status_animations(self):
+        """Start status animations and indicators"""
+        self.animate_connection_indicator()
+        self.update_portfolio_visualization()
+
+    def animate_connection_indicator(self):
+        """Animate connection status indicator"""
+        if not hasattr(self, 'connection_indicator'):
+            return
+            
+        # Clear canvas
+        self.connection_indicator.delete("all")
+        
+        # Draw animated indicator based on connection status
+        if self.trading_system.mt5_connected:
+            # Connected - solid green circle with pulse effect
+            size = 8 + (self.connection_animation_state % 3)
+            self.connection_indicator.create_oval(10-size//2, 10-size//2, 
+                                                10+size//2, 10+size//2,
+                                                fill=self.COLORS['accent_green'], 
+                                                outline=self.COLORS['accent_green'])
         else:
-            self.connection_status.configure(text="Disconnected", fg='red')
-            messagebox.showerror("Error", "Failed to connect to MT5")
-    
-    def disconnect_mt5(self):
-        """Disconnect from MT5"""
-        self.stop_trading()
-        self.trading_system.disconnect_mt5()
-        self.connection_status.configure(text="Disconnected", fg='red')
-    
-    def scan_terminals(self):
-        """Scan for available terminals"""
+            # Disconnected - red circle
+            self.connection_indicator.create_oval(6, 6, 14, 14,
+                                                fill=self.COLORS['accent_red'], 
+                                                outline=self.COLORS['accent_red'])
+        
+        self.connection_animation_state = (self.connection_animation_state + 1) % 10
+        
+        # Schedule next animation frame with reduced frequency to prevent GUI blocking
+        self.root.after(1000, self.animate_connection_indicator)
+
+    def update_connection_indicator(self, connected):
+        """Update connection status display"""
+        if connected:
+            self.connection_status.configure(text="Connected", style='Success.TLabel')
+        else:
+            self.connection_status.configure(text="Disconnected", style='Error.TLabel')
+
+    def update_portfolio_visualization(self):
+        """Update portfolio donut chart visualization"""
+        if not hasattr(self, 'portfolio_canvas'):
+            return
+            
         try:
-            self.scan_btn.config(state='disabled')
+            canvas = self.portfolio_canvas
+            canvas.delete("all")
+            
+            # Get portfolio data
+            total_volume = self.trading_system.buy_volume + self.trading_system.sell_volume
+            if total_volume == 0:
+                # No positions - draw empty state
+                canvas.create_text(125, 60, text="No Active Positions", 
+                                 fill=self.COLORS['text_muted'], 
+                                 font=('Segoe UI', 11))
+                return
+            
+            # Calculate percentages
+            buy_pct = self.trading_system.buy_volume / total_volume
+            sell_pct = self.trading_system.sell_volume / total_volume
+            
+            # Draw donut chart
+            center_x, center_y = 125, 60
+            radius = 35
+            inner_radius = 20
+            
+            # Draw arcs
+            if buy_pct > 0:
+                extent = int(360 * buy_pct)
+                canvas.create_arc(center_x-radius, center_y-radius, 
+                                center_x+radius, center_y+radius,
+                                start=0, extent=extent, fill=self.COLORS['accent_green'],
+                                outline=self.COLORS['accent_green'], width=2)
+            
+            if sell_pct > 0:
+                start_angle = int(360 * buy_pct)
+                extent = int(360 * sell_pct)
+                canvas.create_arc(center_x-radius, center_y-radius, 
+                                center_x+radius, center_y+radius,
+                                start=start_angle, extent=extent, 
+                                fill=self.COLORS['accent_red'],
+                                outline=self.COLORS['accent_red'], width=2)
+            
+            # Draw inner circle to create donut effect
+            canvas.create_oval(center_x-inner_radius, center_y-inner_radius,
+                             center_x+inner_radius, center_y+inner_radius,
+                             fill=self.COLORS['bg_secondary'], 
+                             outline=self.COLORS['bg_secondary'])
+            
+            # Draw center text
+            canvas.create_text(center_x, center_y-8, text=f"{buy_pct*100:.1f}%", 
+                             fill=self.COLORS['accent_green'], 
+                             font=('Segoe UI', 10, 'bold'))
+            canvas.create_text(center_x, center_y+8, text="BUY", 
+                             fill=self.COLORS['text_secondary'], 
+                             font=('Segoe UI', 8))
+            
+        except Exception as e:
+            print(f"Error updating portfolio visualization: {str(e)}")
+        
+        # Schedule next update with reduced frequency to prevent GUI overload
+        self.root.after(5000, self.update_portfolio_visualization)
+
+    def update_health_progress(self):
+        """Update health progress bar"""
+        if not hasattr(self, 'health_canvas'):
+            return
+            
+        canvas = self.health_canvas
+        canvas.delete("all")
+        
+        # Get health percentage
+        health = self.trading_system.portfolio_health
+        
+        # Draw background
+        canvas.create_rectangle(0, 0, 250, 8, fill=self.COLORS['bg_accent'], 
+                              outline=self.COLORS['border'])
+        
+        # Draw progress
+        progress_width = int(250 * (health / 100))
+        
+        # Color based on health level
+        if health >= 80:
+            color = self.COLORS['accent_green']
+        elif health >= 60:
+            color = self.COLORS['accent_orange']
+        else:
+            color = self.COLORS['accent_red']
+        
+        if progress_width > 0:
+            canvas.create_rectangle(0, 0, progress_width, 8, fill=color, outline=color)
+
+    def update_volume_balance_visualization(self):
+        """Update volume balance visualization"""
+        if not hasattr(self, 'volume_canvas'):
+            return
+            
+        canvas = self.volume_canvas
+        canvas.delete("all")
+        
+        total_volume = self.trading_system.buy_volume + self.trading_system.sell_volume
+        if total_volume == 0:
+            canvas.create_text(125, 15, text="No Volume", 
+                             fill=self.COLORS['text_muted'], 
+                             font=('Segoe UI', 9))
+            return
+        
+        # Calculate positions
+        buy_width = int(250 * (self.trading_system.buy_volume / total_volume))
+        sell_width = 250 - buy_width
+        
+        # Draw volume bars
+        if buy_width > 0:
+            canvas.create_rectangle(0, 5, buy_width, 25, 
+                                  fill=self.COLORS['accent_green'], 
+                                  outline=self.COLORS['accent_green'])
+            canvas.create_text(buy_width//2, 15, 
+                             text=f"{self.trading_system.buy_volume:.2f}", 
+                             fill=self.COLORS['text_primary'], 
+                             font=('Segoe UI', 8, 'bold'))
+        
+        if sell_width > 0:
+            canvas.create_rectangle(buy_width, 5, 250, 25, 
+                                  fill=self.COLORS['accent_red'], 
+                                  outline=self.COLORS['accent_red'])
+            canvas.create_text(buy_width + sell_width//2, 15, 
+                             text=f"{self.trading_system.sell_volume:.2f}", 
+                             fill=self.COLORS['text_primary'], 
+                             font=('Segoe UI', 8, 'bold'))
+
+    def scan_terminals(self):
+        """Scan for available MT5 terminals"""
+        try:
+            self.scan_btn.config(state='disabled', text='🔍 Scanning...')
+            self.refresh_btn.config(state='disabled')
+            self.terminal_combobox.set('')
             self.terminal_info_label.config(text="Scanning terminals...")
             
+            # Update UI to show scanning state
+            self.root.update()
+            
+            # Scan terminals in a separate thread to prevent UI blocking
             def scan_thread():
                 try:
                     terminals = self.trading_system.scan_available_terminals()
+                    
+                    # Update UI in main thread
                     self.root.after(0, self.update_terminal_list, terminals)
                 except Exception as e:
-                    self.root.after(0, lambda: self.scan_error(str(e)))
+                    self.root.after(0, self.scan_error, str(e))
             
             threading.Thread(target=scan_thread, daemon=True).start()
             
         except Exception as e:
-            self.scan_error(str(e))
+            self.scan_btn.config(state='normal', text='🔍 Scan')
+            self.refresh_btn.config(state='normal')
+            messagebox.showerror("Error", f"Failed to scan terminals: {str(e)}")
     
     def update_terminal_list(self, terminals):
-        """Update terminal dropdown list"""
+        """Update terminal list from scan results"""
         try:
-            self.terminal_combobox['values'] = []
+            self.trading_system.available_terminals = terminals
+            
+            # Update combobox
+            terminal_names = [terminal['display_name'] for terminal in terminals]
+            self.terminal_combobox['values'] = terminal_names
             
             if terminals:
-                values = []
-                for terminal in terminals:
-                    display_name = terminal.get('display_name', 'Unknown Terminal')
-                    values.append(display_name)
-                
-                self.terminal_combobox['values'] = values
-                if values:
-                    self.terminal_combobox.set(values[0])
-                    self.on_terminal_selected()
-                
+                self.terminal_combobox.set(terminal_names[0])  # Select first terminal
+                self.on_terminal_selected()  # Update info display
                 self.terminal_info_label.config(text=f"Found {len(terminals)} terminal(s)")
             else:
                 self.terminal_info_label.config(text="No terminals found")
             
+            self.scan_btn.config(state='normal', text='🔍 Scan')
+            self.refresh_btn.config(state='normal')
+            
         except Exception as e:
-            self.terminal_info_label.config(text=f"Error: {str(e)}")
-        finally:
-            self.scan_btn.config(state='normal')
+            self.scan_error(str(e))
     
     def scan_error(self, error_msg):
         """Handle scan error"""
-        self.terminal_info_label.config(text=f"Scan failed: {error_msg}")
-        self.scan_btn.config(state='normal')
+        self.scan_btn.config(state='normal', text='🔍 Scan')
+        self.refresh_btn.config(state='normal')
+        self.terminal_info_label.config(text="Scan failed")
+        messagebox.showerror("Scan Error", f"Failed to scan terminals: {error_msg}")
     
     def on_terminal_selected(self, event=None):
         """Handle terminal selection"""
         try:
-            selected = self.terminal_var.get()
-            if selected:
-                self.terminal_info_label.config(text=f"Selected: {selected}")
+            selected_name = self.terminal_var.get()
+            if not selected_name or not self.trading_system.available_terminals:
+                return
+            
+            # Find selected terminal
+            selected_terminal = None
+            for terminal in self.trading_system.available_terminals:
+                if terminal['display_name'] == selected_name:
+                    selected_terminal = terminal
+                    break
+            
+            if selected_terminal:
+                self.trading_system.selected_terminal = selected_terminal
+                
+                # Update info display
+                info_text = f"Login: {selected_terminal['login']} | Server: {selected_terminal['server']}"
+                if len(info_text) > 35:
+                    info_text = info_text[:32] + "..."
+                
+                self.terminal_info_label.config(text=info_text)
+                
         except Exception as e:
-            self.terminal_info_label.config(text=f"Selection error: {str(e)}")
+            self.terminal_info_label.config(text="Selection error")
+            self.trading_system.log(f"Terminal selection error: {str(e)}", "ERROR")
+
+    def connect_mt5(self):
+        """Connect to selected MT5 terminal"""
+        try:
+            # Check if a terminal is selected
+            if not self.trading_system.selected_terminal:
+                # Show dialog to scan first
+                result = messagebox.askyesno("No Terminal Selected", 
+                                           "No MT5 terminal selected. Would you like to scan for terminals first?")
+                if result:
+                    self.scan_terminals()
+                    return
+                else:
+                    # Try default connection
+                    if self.trading_system.connect_mt5():
+                        self.update_connection_indicator(True)
+                        messagebox.showinfo("Success", "Connected to MetaTrader 5 (Default)")
+                    else:
+                        messagebox.showerror("Error", "Failed to connect to MetaTrader 5")
+                    return
+            
+            # Connect to selected terminal
+            terminal_path = self.trading_system.selected_terminal.get('path', 'default')
+            display_name = self.trading_system.selected_terminal.get('display_name', 'Unknown')
+            
+            self.connect_btn.config(state='disabled', text='🔌 Connecting...')
+            self.root.update()
+            
+            # Connect in separate thread to prevent UI blocking
+            def connect_thread():
+                try:
+                    success = self.trading_system.connect_to_specific_terminal(terminal_path)
+                    self.root.after(0, self.connection_complete, success, display_name)
+                except Exception as e:
+                    self.root.after(0, self.connection_error, str(e))
+            
+            threading.Thread(target=connect_thread, daemon=True).start()
+            
+        except Exception as e:
+            self.connect_btn.config(state='normal', text='🔌 Connect MT5')
+            messagebox.showerror("Error", f"Connection error: {str(e)}")
     
+    def connection_complete(self, success, terminal_name):
+        """Handle connection completion"""
+        self.connect_btn.config(state='normal', text='🔌 Connect MT5')
+        
+        if success:
+            self.update_connection_indicator(True)
+            messagebox.showinfo("Success", f"Connected to {terminal_name}")
+        else:
+            messagebox.showerror("Error", f"Failed to connect to {terminal_name}")
+    
+    def connection_error(self, error_msg):
+        """Handle connection error"""
+        self.connect_btn.config(state='normal', text='🔌 Connect MT5')
+        messagebox.showerror("Connection Error", f"Failed to connect: {error_msg}")
+
+    def auto_scan_terminals(self):
+        """Automatically scan for terminals on startup with timeout protection"""
+        try:
+            # Check if GUI is ready and scanning is not already in progress
+            if not hasattr(self, 'scan_btn') or self.scan_btn.cget('state') == 'disabled':
+                # GUI not ready or scan in progress, skip this auto-scan
+                self.terminal_info_label.config(text="Auto-scan skipped (GUI loading...)")
+                return
+                
+            self.terminal_info_label.config(text="Auto-scanning terminals...")
+            
+            # Use a separate thread for auto-scan to prevent blocking
+            def auto_scan_thread():
+                try:
+                    terminals = self.trading_system.scan_available_terminals()
+                    # Update UI in main thread
+                    self.root.after(0, self.update_terminal_list, terminals)
+                except Exception as e:
+                    self.root.after(0, lambda: self.terminal_info_label.config(text="Auto-scan failed"))
+                    self.trading_system.log(f"Auto-scan error: {str(e)}", "WARNING")
+            
+            threading.Thread(target=auto_scan_thread, daemon=True).start()
+            
+        except Exception as e:
+            self.trading_system.log(f"Auto-scan error: {str(e)}", "ERROR")
+            self.terminal_info_label.config(text="Auto-scan failed")
+
+    def refresh_terminals(self):
+        """Refresh the terminal list"""
+        try:
+            if self.scan_btn.cget('state') == 'disabled':
+                # Scan already in progress
+                return
+                
+            self.terminal_info_label.config(text="Refreshing terminals...")
+            self.scan_terminals()
+        except Exception as e:
+            self.trading_system.log(f"Refresh error: {str(e)}", "ERROR")
+            self.terminal_info_label.config(text="Refresh failed")
+
+    def disconnect_mt5(self):
+        """Disconnect from MT5"""
+        self.stop_trading()
+        self.trading_system.disconnect_mt5()
+        self.update_connection_indicator(False)
+
     def start_trading(self):
         """Start automated trading"""
         if not self.trading_system.mt5_connected:
@@ -6147,80 +6892,339 @@ class TradingGUI:
             self.start_btn.config(state='disabled')
             self.stop_btn.config(state='normal')
             messagebox.showinfo("Success", "Trading started")
-    
+
     def stop_trading(self):
         """Stop automated trading"""
         if self.trading_system.trading_active:
             self.trading_system.trading_active = False
             self.start_btn.config(state='normal')
             self.stop_btn.config(state='disabled')
+            messagebox.showinfo("Success", "Trading stopped")
+
+    def update_terminal_list(self, terminals):
+        """Update terminal list from scan results"""
+        try:
+            self.trading_system.available_terminals = terminals
+            
+            # Update combobox
+            terminal_names = [terminal['display_name'] for terminal in terminals]
+            self.terminal_combobox['values'] = terminal_names
+            
+            if terminals:
+                self.terminal_combobox.set(terminal_names[0])  # Select first terminal
+                self.on_terminal_selected()  # Update info display
+                self.terminal_info_label.config(text=f"Found {len(terminals)} terminal(s)")
+            else:
+                self.terminal_info_label.config(text="No terminals found")
+            
+            self.scan_btn.config(state='normal', text='🔍 Scan')
+            self.refresh_btn.config(state='normal')
+            
+        except Exception as e:
+            self.scan_error(str(e))
     
+    def scan_error(self, error_msg):
+        """Handle scan error"""
+        self.scan_btn.config(state='normal', text='🔍 Scan')
+        self.refresh_btn.config(state='normal')
+        self.terminal_info_label.config(text="Scan failed")
+        messagebox.showerror("Scan Error", f"Failed to scan terminals: {error_msg}")
+    
+    def on_terminal_selected(self, event=None):
+        """Handle terminal selection"""
+        try:
+            selected_name = self.terminal_var.get()
+            if not selected_name or not self.trading_system.available_terminals:
+                return
+            
+            # Find selected terminal
+            selected_terminal = None
+            for terminal in self.trading_system.available_terminals:
+                if terminal['display_name'] == selected_name:
+                    selected_terminal = terminal
+                    break
+            
+            if selected_terminal:
+                self.trading_system.selected_terminal = selected_terminal
+                
+                # Update info display
+                info_text = f"Login: {selected_terminal['login']} | Server: {selected_terminal['server']}"
+                if len(info_text) > 35:
+                    info_text = info_text[:32] + "..."
+                
+                self.terminal_info_label.config(text=info_text)
+                
+        except Exception as e:
+            self.terminal_info_label.config(text="Selection error")
+            self.trading_system.log(f"Terminal selection error: {str(e)}", "ERROR")
+
+    def connection_complete(self, success, terminal_name):
+        """Handle connection completion"""
+        self.connect_btn.config(state='normal', text='🔌 Connect MT5')
+        
+        if success:
+            self.connection_status.config(text="✅ Connected", foreground='#00ff00')
+            messagebox.showinfo("Success", f"Connected to {terminal_name}")
+        else:
+            messagebox.showerror("Error", f"Failed to connect to {terminal_name}")
+    
+    def connection_error(self, error_msg):
+        """Handle connection error"""
+        self.connect_btn.config(state='normal', text='🔌 Connect MT5')
+        messagebox.showerror("Connection Error", f"Failed to connect: {error_msg}")
+
     def update_positions_display(self):
-        """Update positions in treeview"""
+        """Update positions in the modern treeview"""
         try:
             # Clear existing items
             for item in self.positions_tree.get_children():
                 self.positions_tree.delete(item)
             
-            # Add current positions
-            for position in self.trading_system.positions:
-                self.positions_tree.insert('', 'end', values=(
-                    position.symbol,
-                    position.type,
-                    f"{position.volume:.2f}",
-                    f"{position.open_price:.5f}",
-                    f"{position.profit:.2f}"
-                ))
-        except Exception as e:
-            pass  # Silent error handling for display
-    
-    def update_stats_display(self):
-        """Update statistics display"""
-        try:
-            total_positions = len(self.trading_system.positions)
-            buy_volume = self.trading_system.buy_volume
-            sell_volume = self.trading_system.sell_volume
+            # Update position count
+            if hasattr(self, 'pos_count_label'):
+                pos_count = len(self.trading_system.positions)
+                max_positions = self.trading_system.max_positions
+                self.pos_count_label.config(text=f"Positions: {pos_count}/{max_positions}")
             
-            stats_text = f"Positions: {total_positions} | Buy: {buy_volume:.2f} | Sell: {sell_volume:.2f}"
-            self.stats_label.config(text=stats_text)
+            # Add current positions with enhanced styling
+            for i, pos in enumerate(self.trading_system.positions):
+                values = (
+                    pos.ticket,
+                    pos.type,
+                    f"{pos.volume:.2f}",
+                    f"{pos.open_price:.5f}",
+                    f"{pos.current_price:.5f}",
+                    f"${pos.profit:.2f}",
+                    f"${pos.profit_per_lot:.2f}",
+                    pos.role,
+                    pos.efficiency,
+                    "🟢 Active" if pos.profit >= 0 else "🔴 Loss"
+                )
+                
+                # Determine tags for styling
+                tags = []
+                
+                # Alternating row colors
+                if i % 2 == 0:
+                    tags.append("evenrow")
+                else:
+                    tags.append("oddrow")
+                
+                # Efficiency color coding
+                if pos.efficiency == "excellent":
+                    tags.append("excellent")
+                elif pos.efficiency == "good":
+                    tags.append("good")
+                elif pos.efficiency == "fair":
+                    tags.append("fair")
+                else:
+                    tags.append("poor")
+                
+                self.positions_tree.insert('', 'end', values=values, tags=tuple(tags))
+            
         except Exception as e:
-            self.stats_label.config(text="Stats: Error loading")
-    
-    def update_log_display(self):
-        """Update log display"""
+            print(f"Error updating positions display: {str(e)}")
+
+    def update_analytics_display(self):
+        """Update analytics with modern styling and enhanced information"""
         try:
-            if hasattr(self.trading_system, 'log_queue'):
-                while True:
-                    try:
-                        log_entry = self.trading_system.log_queue.get_nowait()
-                        self.log_display.insert(tk.END, f"{log_entry}\n")
-                        self.log_display.see(tk.END)
-                    except queue.Empty:
-                        break
+            # Update statistics
+            self.stats_text.delete(1.0, tk.END)
+            
+            smart_stats = self.trading_system.get_smart_management_stats()
+            current_time = datetime.now().strftime("%H:%M:%S")
+            
+            # Enhanced market status
+            market_status = "🟢 Active" if self.trading_system.trading_active else "🔴 Stopped"
+            last_signal = "Never"
+            if self.trading_system.last_signal_time:
+                seconds_ago = (datetime.now() - self.trading_system.last_signal_time).seconds
+                last_signal = f"{seconds_ago}s ago"
+            
+            # Modern formatted statistics
+            stats = f"""⏰ REAL-TIME STATUS [{current_time}]
+Market Status: {market_status}
+Last Signal: {last_signal}
+Hourly Signals: {len(self.trading_system.hourly_signals)}/{self.trading_system.max_signals_per_hour}
+
+🎯 TRADING PERFORMANCE
+Total Signals: {self.trading_system.total_signals}
+Successful: {self.trading_system.successful_signals}
+Success Rate: {(self.trading_system.successful_signals/max(1,self.trading_system.total_signals)*100):.1f}%
+Daily Trades: {self.trading_system.daily_trades}/{self.trading_system.max_daily_trades}
+
+🧠 SMART MANAGEMENT
+Total Redirects: {smart_stats.get('total_redirects', 0)}
+Success Rate: {smart_stats.get('redirect_success_rate', 0):.1f}%
+Profit Captured: ${smart_stats.get('redirect_profit_captured', 0):.2f}
+
+💰 PORTFOLIO METRICS
+Active Positions: {len(self.trading_system.positions)}/{self.trading_system.max_positions}
+Health Score: {self.trading_system.portfolio_health:.1f}%
+Balance Ratio: {(self.trading_system.buy_volume/(max(0.01, self.trading_system.buy_volume+self.trading_system.sell_volume))*100):.1f}% BUY"""
+            
+            self.stats_text.insert(tk.END, stats)
+            
+            # Update volume labels
+            if hasattr(self, 'buy_volume_label'):
+                self.buy_volume_label.config(text=f"BUY: {self.trading_system.buy_volume:.2f}")
+            if hasattr(self, 'sell_volume_label'):
+                self.sell_volume_label.config(text=f"SELL: {self.trading_system.sell_volume:.2f}")
+            
+            # Update recommendations
+            self.recommendations_text.delete(1.0, tk.END)
+            recommendations = self.get_smart_router_recommendations(smart_stats)
+            
+            if recommendations:
+                rec_text = f"🧠 SMART INSIGHTS [{current_time}]\n\n"
+                for i, rec in enumerate(recommendations, 1):
+                    rec_text += f"• {rec}\n\n"
+            else:
+                rec_text = f"🧠 SYSTEM STATUS [{current_time}]\n\n"
+                if self.trading_system.trading_active:
+                    rec_text += "✅ System running and monitoring\n"
+                    rec_text += "⏳ Waiting for signal conditions\n"
+                    rec_text += "📊 Analyzing M5 XAUUSD candles\n"
+                else:
+                    rec_text += "⏹️ Trading system stopped\n"
+                    rec_text += "🔌 Connect to MT5 to begin\n"
+            
+            self.recommendations_text.insert(tk.END, rec_text)
+            
+            # Update visual indicators
+            self.update_health_progress()
+            self.update_volume_balance_visualization()
+            
         except Exception as e:
-            pass  # Silent error handling for log display
+            print(f"Error updating analytics display: {str(e)}")
+
+    def get_smart_router_recommendations(self, smart_stats: dict) -> List[str]:
+        """Generate modern smart router recommendations"""
+        recommendations = []
+        
+        try:
+            # Router performance analysis
+            redirect_ratio = smart_stats.get('redirect_ratio', 0)
+            redirect_success_rate = smart_stats.get('redirect_success_rate', 0)
+            avg_hold_score = smart_stats.get('avg_hold_score', 50)
+            
+            if redirect_ratio > 30:
+                recommendations.append(f"🔄 High redirect activity ({redirect_ratio:.1f}%) - Smart balance management active")
+            
+            if redirect_success_rate > 80 and smart_stats.get('total_redirects', 0) > 5:
+                recommendations.append(f"✅ Excellent redirect success rate ({redirect_success_rate:.1f}%)")
+            
+            # Portfolio insights
+            if avg_hold_score < 30:
+                recommendations.append("📈 Low average hold score - Multiple positions ready for profit-taking")
+            elif avg_hold_score > 70:
+                recommendations.append("💪 High hold score - Portfolio in strong holding position")
+            
+            # Balance analysis
+            total_volume = self.trading_system.buy_volume + self.trading_system.sell_volume
+            if total_volume > 0:
+                buy_ratio = self.trading_system.buy_volume / total_volume
+                if abs(buy_ratio - 0.5) > 0.2:
+                    recommendations.append(f"⚖️ Balance monitoring: {buy_ratio*100:.1f}% BUY - Router optimizing")
+            
+            # Profit capture insights
+            profit_captured = smart_stats.get('redirect_profit_captured', 0)
+            if profit_captured > 100:
+                recommendations.append(f"💰 Router captured ${profit_captured:.2f} through smart redirects")
+            
+            # System health
+            if self.trading_system.portfolio_health < 40:
+                recommendations.append("🚨 Portfolio health low - Smart system in protective mode")
+            elif self.trading_system.portfolio_health > 80:
+                recommendations.append("🌟 Excellent portfolio health - System optimizing growth")
+            
+        except Exception as e:
+            self.trading_system.log(f"Error generating router recommendations: {str(e)}", "ERROR")
+        
+        return recommendations
+
+    def update_status_labels(self):
+        """Update status labels with modern formatting"""
+        try:
+            # Update portfolio label if it exists (old style support)
+            if hasattr(self, 'portfolio_label') and hasattr(self.portfolio_label, 'config'):
+                try:
+                    self.portfolio_label.config(text=f"💼 Portfolio Health: {self.trading_system.portfolio_health:.1f}%")
+                except:
+                    pass
+            
+            # Update volume label if it exists (old style support)  
+            if hasattr(self, 'volume_label') and hasattr(self.volume_label, 'config'):
+                try:
+                    self.volume_label.config(text=f"⚖️ Volume Balance: {self.trading_system.buy_volume:.2f}/{self.trading_system.sell_volume:.2f}")
+                except:
+                    pass
+                    
+        except Exception as e:
+            print(f"Error updating status labels: {str(e)}")
+
+    def update_log_display(self):
+        """Update log display with syntax highlighting"""
+        try:
+            while True:
+                message = self.trading_system.log_queue.get_nowait()
+                
+                # Insert message with appropriate styling
+                self.log_text.insert(tk.END, message + "\n")
+                
+                # Apply syntax highlighting
+                lines = self.log_text.get("1.0", tk.END).split('\n')
+                current_line = len(lines) - 2  # -2 because of the trailing newline
+                
+                if current_line > 0:
+                    line_start = f"{current_line}.0"
+                    line_end = f"{current_line}.end"
+                    
+                    # Apply tags based on content
+                    if "ERROR" in message:
+                        self.log_text.tag_add("ERROR", line_start, line_end)
+                    elif "WARNING" in message:
+                        self.log_text.tag_add("WARNING", line_start, line_end)
+                    elif "✅" in message or "SUCCESS" in message:
+                        self.log_text.tag_add("SUCCESS", line_start, line_end)
+                    elif message.strip().startswith(("🔍", "📊", "⏰")):
+                        self.log_text.tag_add("INFO", line_start, line_end)
+                
+                self.log_text.see(tk.END)
+                
+        except queue.Empty:
+            pass
 
     def update_loop(self):
-        """Simple GUI update loop"""
+        """Enhanced GUI update loop with modern features and smart updating"""
         try:
-            if self.trading_system.mt5_connected:
+            # Skip updates if MT5 is not connected to reduce CPU load
+            if hasattr(self.trading_system, 'mt5_connected') and not self.trading_system.mt5_connected:
+                # Only update log display when not connected
+                self.update_log_display()
+            else:
+                # Full update when connected
                 self.trading_system.update_positions()
                 self.update_positions_display()
-                self.update_stats_display()
-            
-            self.update_log_display()
+                self.update_analytics_display()
+                self.update_status_labels()
+                self.update_log_display()
             
         except Exception as e:
-            print(f"GUI update error: {str(e)}")
+            # Use trading system logger if available, fallback to print
+            if hasattr(self, 'trading_system'):
+                self.trading_system.log(f"GUI update error: {str(e)}", "ERROR")
+            else:
+                print(f"GUI update error: {str(e)}")
         
-        # Schedule next update (every 3 seconds)
-        self.root.after(3000, self.update_loop)
+        # Schedule next update (reduced frequency for better stability)
+        self.root.after(2500, self.update_loop)
 
     def run(self):
-        """Start the simplified GUI application"""
-        self.trading_system.log("AI Gold Grid Trading System v3.0 Started")
-        self.trading_system.log("Simplified GUI Interface Loaded")
-        self.trading_system.log("Ready for MT5 connection")
+        """Start the modern GUI application"""
+        self.trading_system.log("🏆 Modern AI Gold Grid Trading System v3.0 Started")
+        self.trading_system.log("🎨 Professional GUI Interface Loaded")
+        self.trading_system.log("🔌 Ready for MT5 connection")
         self.root.mainloop()
 
 def main():
