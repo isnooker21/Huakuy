@@ -30,6 +30,10 @@ trading_state*.json
 positions_backup*.pkl
 *.log
 
+# Test files and temporary data
+test_gui_fixes.py
+/tmp/
+
 # IDE files
 .vscode/
 .idea/
