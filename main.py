@@ -27,8 +27,15 @@ import time
 import json
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any, TYPE_CHECKING
 from enum import Enum
+
+# TYPE_CHECKING imports for proper type annotations
+if TYPE_CHECKING:
+    from pandas import DataFrame
+else:
+    # Runtime fallback to avoid import errors
+    DataFrame = Any
 import queue
 import os
 import pickle
@@ -961,7 +968,7 @@ class TradingSystem:
         except Exception as e:
             self.log(f"Error in risk management: {str(e)}", "ERROR")
 
-    def calculate_market_volatility(self, df: pd.DataFrame) -> float:
+    def calculate_market_volatility(self, df: DataFrame) -> float:
         """Calculate recent market volatility"""
         if df is None or len(df) < 5:
             return 1.0
@@ -985,7 +992,7 @@ class TradingSystem:
             self.log(f"Error calculating volatility: {str(e)}", "ERROR")
             return 1.0
 
-    def get_market_data(self) -> Optional[pd.DataFrame]:
+    def get_market_data(self) -> Optional[DataFrame]:
         """Get recent market data for analysis"""
         if not self.mt5_connected:
             return None
@@ -1015,7 +1022,7 @@ class TradingSystem:
             self.log(f"Error getting market data: {str(e)}", "ERROR")
             return None
 
-    def analyze_volume_pattern(self, df: pd.DataFrame) -> dict:
+    def analyze_volume_pattern(self, df: DataFrame) -> Dict[str, Any]:
         """📊 วิเคราะห์รูปแบบปริมาณการซื้อขาย"""
         try:
             if df is None or len(df) < 5:
@@ -1043,7 +1050,7 @@ class TradingSystem:
             self.log(f"Error analyzing volume pattern: {str(e)}", "ERROR")
             return {'pattern': 'ERROR', 'strength': 0.0, 'trend': 'NEUTRAL'}
 
-    def detect_sr_levels(self, df: pd.DataFrame) -> dict:
+    def detect_sr_levels(self, df: DataFrame) -> Dict[str, Any]:
         """🎯 ตรวจหา Support/Resistance levels"""
         try:
             if df is None or len(df) < 10:
@@ -1106,7 +1113,7 @@ class TradingSystem:
             self.log(f"Error detecting S/R levels: {str(e)}", "ERROR")
             return {'support_levels': [], 'resistance_levels': [], 'current_bias': 'NEUTRAL'}
 
-    def calculate_market_sentiment(self, df: pd.DataFrame) -> float:
+    def calculate_market_sentiment(self, df: DataFrame) -> float:
         """🧠 คำนวณ sentiment ของตลาด (0.0-1.0)"""
         try:
             if df is None or len(df) < 5:
@@ -1156,7 +1163,7 @@ class TradingSystem:
             self.log(f"Error calculating market sentiment: {str(e)}", "ERROR")
             return 0.5  # Return neutral on error
 
-    def analyze_real_time_sentiment(self) -> dict:
+    def analyze_real_time_sentiment(self) -> Dict[str, Any]:
         """วิเคราะห์ sentiment แบบ real-time"""
         try:
             sentiment = {
@@ -1300,7 +1307,7 @@ class TradingSystem:
             self.log(f"Error analyzing portfolio exposure: {str(e)}", "ERROR")
             return analysis
 
-    def analyze_mini_trend(self, df: pd.DataFrame) -> Optional[Signal]:
+    def analyze_mini_trend(self, df: DataFrame) -> Optional[Signal]:
         """Analyze mini trend and generate signals with new conditions"""
         if df is None or len(df) < 3:
             return None
@@ -1369,7 +1376,7 @@ class TradingSystem:
             self.log(f"Error analyzing trend: {str(e)}", "ERROR")
             return None
 
-    def analyze_advanced_market_patterns(self, df: pd.DataFrame) -> Optional[Signal]:
+    def analyze_advanced_market_patterns(self, df: DataFrame) -> Optional[Signal]:
         """วิเคราะห์ pattern ขั้นสูงด้วย AI-inspired techniques"""
         if df is None or len(df) < 10:
             return None
@@ -1403,7 +1410,7 @@ class TradingSystem:
             self.log(f"Error in advanced analysis: {str(e)}", "ERROR")
             return None
 
-    def calculate_trend_strength(self, df: pd.DataFrame) -> float:
+    def calculate_trend_strength(self, df: DataFrame) -> float:
         """คำนวณความแรงของ trend"""
         try:
             last_10 = df.tail(10)
@@ -1422,7 +1429,7 @@ class TradingSystem:
         except Exception as e:
             return 0.5
 
-    def calculate_momentum_score(self, df: pd.DataFrame) -> float:
+    def calculate_momentum_score(self, df: DataFrame) -> float:
         """คำนวณ momentum ด้วย RSI-inspired method"""
         try:
             last_10 = df.tail(10)
@@ -2125,7 +2132,7 @@ class TradingSystem:
         
         return recommendations
 
-    def smart_signal_router(self, signal: Signal) -> dict:
+    def smart_signal_router(self, signal: Signal) -> Dict[str, Any]:
         """
         Smart Signal Router - ตัดสินใจว่าจะ execute, redirect หรือ skip signal
         Returns: {'action': 'execute'/'redirect'/'skip', 'details': {...}}
@@ -5641,7 +5648,7 @@ class TradingSystem:
             self.log(f"Error calculating smart HG volume: {str(e)}", "ERROR")
             return self.min_hedge_volume
 
-    def detect_reversal_patterns(self, market_data: pd.DataFrame, position: Position) -> float:
+    def detect_reversal_patterns(self, market_data: DataFrame, position: Position) -> float:
         """🔄 ตรวจจับรูปแบบการเปลี่ยนทิศทางของตลาด"""
         try:
             if market_data is None or len(market_data) < 5:
@@ -5691,7 +5698,7 @@ class TradingSystem:
             self.log(f"Error detecting reversal patterns: {str(e)}", "ERROR")
             return 0.5
 
-    def matches_failure_pattern(self, position: Position, market_data: pd.DataFrame) -> bool:
+    def matches_failure_pattern(self, position: Position, market_data: DataFrame) -> bool:
         """❌ ตรวจสอบว่าตรงกับรูปแบบที่เคยล้มเหลว"""
         try:
             if not self.hg_failure_analysis:
@@ -5827,7 +5834,7 @@ class TradingSystem:
         except Exception as e:
             self.log(f"Error recording HG decision: {str(e)}", "ERROR")
 
-    def get_current_market_snapshot(self) -> dict:
+    def get_current_market_snapshot(self) -> Dict[str, Any]:
         """📸 ถ่ายภาพสถานการณ์ตลาดปัจจุบัน"""
         try:
             market_data = self.get_market_data()
@@ -5845,7 +5852,7 @@ class TradingSystem:
         except Exception as e:
             return {'error': str(e)}
 
-    def get_current_trend_category(self, market_data: pd.DataFrame) -> str:
+    def get_current_trend_category(self, market_data: DataFrame) -> str:
         """📈 หาประเภทของเทรนด์ปัจจุบัน"""
         try:
             trend_strength = self.calculate_trend_strength(market_data)
