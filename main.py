@@ -453,26 +453,41 @@ class TradingSystem:
         return False
     
     def scan_available_terminals(self) -> List[Dict]:
-        """Scan for available MT5 terminals across different platforms"""
+        """Scan for available MT5 terminals across different platforms with timeout protection"""
         terminals = []
         try:
             import os
             import subprocess
             import platform
+            import signal
             
             self.log("🔍 Scanning for available MT5 terminals...")
             system = platform.system()
             self.log(f"📊 Detected platform: {system}")
             
-            if system == "Windows":
-                terminals = self._scan_windows_terminals()
-            elif system == "Linux":
-                terminals = self._scan_linux_terminals()
-            elif system == "Darwin":  # macOS
-                terminals = self._scan_macos_terminals()
-            else:
-                self.log(f"⚠️ Unsupported platform: {system}", "WARNING")
-                terminals = self._get_default_terminal()
+            # Set a timeout handler for the entire scan operation
+            def timeout_handler(signum, frame):
+                raise TimeoutError("Terminal scan operation timed out")
+            
+            # Only set alarm on Unix-like systems
+            if hasattr(signal, 'SIGALRM'):
+                signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(15)  # 15 second timeout for entire scan
+            
+            try:
+                if system == "Windows":
+                    terminals = self._scan_windows_terminals()
+                elif system == "Linux":
+                    terminals = self._scan_linux_terminals()
+                elif system == "Darwin":  # macOS
+                    terminals = self._scan_macos_terminals()
+                else:
+                    self.log(f"⚠️ Unsupported platform: {system}", "WARNING")
+                    terminals = self._get_default_terminal()
+            finally:
+                # Cancel the alarm
+                if hasattr(signal, 'SIGALRM'):
+                    signal.alarm(0)
             
             # If no terminals found, provide default option
             if not terminals:
@@ -482,6 +497,9 @@ class TradingSystem:
             self.log(f"📊 Terminal scan completed: {len(terminals)} terminal(s) found")
             return terminals
             
+        except TimeoutError:
+            self.log("⏰ Terminal scan operation timed out", "WARNING")
+            return self._get_default_terminal()
         except Exception as e:
             self.log(f"❌ Error scanning terminals: {str(e)}", "ERROR")
             return self._get_default_terminal()
@@ -5988,10 +6006,10 @@ class TradingGUI:
         
         self.trading_system.root = self.root
         
-        # Auto-scan for terminals on startup (after a short delay)
-        self.root.after(1000, self.auto_scan_terminals)
+        # Auto-scan for terminals on startup (after longer delay to ensure GUI is ready)
+        self.root.after(3000, self.auto_scan_terminals)
         
-        # Start animation timers
+        # Start animation timers with reduced frequency
         self.start_status_animations()
 
     def setup_modern_styles(self):
@@ -6532,8 +6550,8 @@ class TradingGUI:
         
         self.connection_animation_state = (self.connection_animation_state + 1) % 10
         
-        # Schedule next animation frame
-        self.root.after(500, self.animate_connection_indicator)
+        # Schedule next animation frame with reduced frequency to prevent GUI blocking
+        self.root.after(1000, self.animate_connection_indicator)
 
     def update_connection_indicator(self, connected):
         """Update connection status display"""
@@ -6603,8 +6621,8 @@ class TradingGUI:
         except Exception as e:
             print(f"Error updating portfolio visualization: {str(e)}")
         
-        # Schedule next update
-        self.root.after(3000, self.update_portfolio_visualization)
+        # Schedule next update with reduced frequency to prevent GUI overload
+        self.root.after(5000, self.update_portfolio_visualization)
 
     def update_health_progress(self):
         """Update health progress bar"""
@@ -6815,10 +6833,28 @@ class TradingGUI:
         messagebox.showerror("Connection Error", f"Failed to connect: {error_msg}")
 
     def auto_scan_terminals(self):
-        """Automatically scan for terminals on startup"""
+        """Automatically scan for terminals on startup with timeout protection"""
         try:
+            # Check if GUI is ready and scanning is not already in progress
+            if not hasattr(self, 'scan_btn') or self.scan_btn.cget('state') == 'disabled':
+                # GUI not ready or scan in progress, skip this auto-scan
+                self.terminal_info_label.config(text="Auto-scan skipped (GUI loading...)")
+                return
+                
             self.terminal_info_label.config(text="Auto-scanning terminals...")
-            self.scan_terminals()
+            
+            # Use a separate thread for auto-scan to prevent blocking
+            def auto_scan_thread():
+                try:
+                    terminals = self.trading_system.scan_available_terminals()
+                    # Update UI in main thread
+                    self.root.after(0, self.update_terminal_list, terminals)
+                except Exception as e:
+                    self.root.after(0, lambda: self.terminal_info_label.config(text="Auto-scan failed"))
+                    self.trading_system.log(f"Auto-scan error: {str(e)}", "WARNING")
+            
+            threading.Thread(target=auto_scan_thread, daemon=True).start()
+            
         except Exception as e:
             self.trading_system.log(f"Auto-scan error: {str(e)}", "ERROR")
             self.terminal_info_label.config(text="Auto-scan failed")
@@ -6864,6 +6900,8 @@ class TradingGUI:
             self.start_btn.config(state='normal')
             self.stop_btn.config(state='disabled')
             messagebox.showinfo("Success", "Trading stopped")
+
+    def scan_terminals(self):
         """Scan for available MT5 terminals"""
         try:
             self.scan_btn.config(state='disabled', text='🔍 Scanning...')
@@ -7003,57 +7041,6 @@ class TradingGUI:
         """Handle connection error"""
         self.connect_btn.config(state='normal', text='🔌 Connect MT5')
         messagebox.showerror("Connection Error", f"Failed to connect: {error_msg}")
-
-    def auto_scan_terminals(self):
-        """Automatically scan for terminals on startup"""
-        try:
-            self.terminal_info_label.config(text="Auto-scanning terminals...")
-            self.scan_terminals()
-        except Exception as e:
-            self.trading_system.log(f"Auto-scan error: {str(e)}", "ERROR")
-            self.terminal_info_label.config(text="Auto-scan failed")
-
-    def refresh_terminals(self):
-        """Refresh the terminal list"""
-        try:
-            if self.scan_btn.cget('state') == 'disabled':
-                # Scan already in progress
-                return
-                
-            self.terminal_info_label.config(text="Refreshing terminals...")
-            self.scan_terminals()
-        except Exception as e:
-            self.trading_system.log(f"Refresh error: {str(e)}", "ERROR")
-            self.terminal_info_label.config(text="Refresh failed")
-
-    def disconnect_mt5(self):
-        """Disconnect from MT5"""
-        self.stop_trading()
-        self.trading_system.disconnect_mt5()
-        self.connection_status.config(text="❌ Disconnected", foreground='#ff0000')
-
-    def start_trading(self):
-        """Start automated trading"""
-        if not self.trading_system.mt5_connected:
-            messagebox.showerror("Error", "Please connect to MT5 first")
-            return
-        
-        if not self.trading_system.trading_active:
-            self.trading_system.trading_active = True
-            self.trading_thread = threading.Thread(target=self.trading_system.trading_loop, daemon=True)
-            self.trading_thread.start()
-            
-            self.start_btn.config(state='disabled')
-            self.stop_btn.config(state='normal')
-            messagebox.showinfo("Success", "Trading started")
-
-    def stop_trading(self):
-        """Stop automated trading"""
-        if self.trading_system.trading_active:
-            self.trading_system.trading_active = False
-            self.start_btn.config(state='normal')
-            self.stop_btn.config(state='disabled')
-            messagebox.showinfo("Success", "Trading stopped")
 
     def update_positions_display(self):
         """Update positions in the modern treeview"""
@@ -7278,20 +7265,29 @@ Balance Ratio: {(self.trading_system.buy_volume/(max(0.01, self.trading_system.b
             pass
 
     def update_loop(self):
-        """Enhanced GUI update loop with modern features"""
+        """Enhanced GUI update loop with modern features and smart updating"""
         try:
-            # Update all displays
-            self.trading_system.update_positions()
-            self.update_positions_display()
-            self.update_analytics_display()
-            self.update_status_labels()
-            self.update_log_display()
+            # Skip updates if MT5 is not connected to reduce CPU load
+            if hasattr(self.trading_system, 'mt5_connected') and not self.trading_system.mt5_connected:
+                # Only update log display when not connected
+                self.update_log_display()
+            else:
+                # Full update when connected
+                self.trading_system.update_positions()
+                self.update_positions_display()
+                self.update_analytics_display()
+                self.update_status_labels()
+                self.update_log_display()
             
         except Exception as e:
-            print(f"GUI update error: {str(e)}")
+            # Use trading system logger if available, fallback to print
+            if hasattr(self, 'trading_system'):
+                self.trading_system.log(f"GUI update error: {str(e)}", "ERROR")
+            else:
+                print(f"GUI update error: {str(e)}")
         
-        # Schedule next update (more frequent for responsive UI)
-        self.root.after(1500, self.update_loop)
+        # Schedule next update (reduced frequency for better stability)
+        self.root.after(2500, self.update_loop)
 
     def run(self):
         """Start the modern GUI application"""
