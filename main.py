@@ -6082,12 +6082,12 @@ class TradingGUI:
         try:
             print("🔄 Starting GUI initialization...")
             
-            # Create main window
+            # Create main window with more compact size
             self.root = tk.Tk()
             self.root.title("🏆 Modern AI Gold Grid Trading System v3.0")
-            self.root.geometry("1600x1000")
+            self.root.geometry("1200x800")
             self.root.configure(bg=self.COLORS['bg_primary'])
-            self.root.minsize(1200, 800)  # Responsive minimum size
+            self.root.minsize(1000, 600)  # Responsive minimum size
             print("✅ Main window created")
             
             # Modern Style Configuration
@@ -6303,9 +6303,9 @@ class TradingGUI:
 
     def create_modern_header(self):
         """Create modern header with app title, version, and animated connection status"""
-        # Header card container
+        # Header card container with reduced padding
         header_container = tk.Frame(self.root, bg=self.COLORS['bg_primary'])
-        header_container.pack(fill='x', padx=20, pady=(20, 10))
+        header_container.pack(fill='x', padx=15, pady=(15, 8))
         
         # Main header card
         header_card = tk.Frame(header_container, bg=self.COLORS['bg_secondary'], 
@@ -6313,12 +6313,12 @@ class TradingGUI:
         header_card.pack(fill='x')
         
         # Add shadow effect
-        shadow_frame = tk.Frame(header_container, bg=self.COLORS['card_shadow'], height=3)
+        shadow_frame = tk.Frame(header_container, bg=self.COLORS['card_shadow'], height=2)
         shadow_frame.pack(fill='x')
         
-        # Header content
+        # Header content with reduced padding
         header_content = tk.Frame(header_card, bg=self.COLORS['bg_secondary'])
-        header_content.pack(fill='x', padx=25, pady=20)
+        header_content.pack(fill='x', padx=20, pady=15)
         
         # Left side - Title and version
         title_frame = tk.Frame(header_content, bg=self.COLORS['bg_secondary'])
@@ -6351,13 +6351,13 @@ class TradingGUI:
 
     def create_control_cards(self):
         """Create modern control panel with card-based layout"""
-        # Control cards container
+        # Control cards container with reduced padding
         control_container = tk.Frame(self.root, bg=self.COLORS['bg_primary'])
-        control_container.pack(fill='x', padx=20, pady=10)
+        control_container.pack(fill='x', padx=15, pady=8)
         
-        # First row of cards
+        # First row of cards with reduced spacing
         cards_row1 = tk.Frame(control_container, bg=self.COLORS['bg_primary'])
-        cards_row1.pack(fill='x', pady=(0, 10))
+        cards_row1.pack(fill='x', pady=(0, 8))
         
         # Connection Control Card
         self.create_connection_card(cards_row1)
@@ -6373,16 +6373,16 @@ class TradingGUI:
 
     def create_connection_card(self, parent):
         """Create connection control card"""
-        card = self.create_card(parent, "🔌 Connection", width=280)
-        card.pack(side='left', padx=(0, 15))
+        card = self.create_card(parent, "🔌 Connection", width=240)
+        card.pack(side='left', padx=(0, 12))
         
         # Connection buttons with modern styling
         btn_frame = tk.Frame(card, bg=self.COLORS['bg_secondary'])
-        btn_frame.pack(fill='x', pady=10)
+        btn_frame.pack(fill='x', pady=8)
         
         self.connect_btn = ttk.Button(btn_frame, text="🔌 Connect MT5", 
                                      command=self.connect_mt5, style='Modern.TButton')
-        self.connect_btn.pack(side='left', padx=(0, 10), fill='x', expand=True)
+        self.connect_btn.pack(side='left', padx=(0, 8), fill='x', expand=True)
         
         self.disconnect_btn = ttk.Button(btn_frame, text="🔌 Disconnect", 
                                         command=self.disconnect_mt5, style='Danger.TButton')
@@ -6390,16 +6390,16 @@ class TradingGUI:
 
     def create_terminal_card(self, parent):
         """Create terminal selection card"""
-        card = self.create_card(parent, "🖥️ Terminal Selection", width=320)
-        card.pack(side='left', padx=(0, 15))
+        card = self.create_card(parent, "🖥️ Terminal Selection", width=280)
+        card.pack(side='left', padx=(0, 12))
         
         # Scan buttons
         btn_frame = tk.Frame(card, bg=self.COLORS['bg_secondary'])
-        btn_frame.pack(fill='x', pady=(0, 10))
+        btn_frame.pack(fill='x', pady=(0, 8))
         
         self.scan_btn = ttk.Button(btn_frame, text="🔍 Scan", 
                                   command=self.scan_terminals, style='Modern.TButton')
-        self.scan_btn.pack(side='left', padx=(0, 8), fill='x', expand=True)
+        self.scan_btn.pack(side='left', padx=(0, 6), fill='x', expand=True)
         
         self.refresh_btn = ttk.Button(btn_frame, text="🔄 Refresh", 
                                      command=self.refresh_terminals, style='Modern.TButton')
@@ -6409,27 +6409,27 @@ class TradingGUI:
         self.terminal_var = tk.StringVar()
         self.terminal_combobox = ttk.Combobox(card, textvariable=self.terminal_var, 
                                             state='readonly', style='Modern.TCombobox',
-                                            font=('Segoe UI', 9))
-        self.terminal_combobox.pack(fill='x', pady=(0, 8))
+                                            font=('Segoe UI', 8))
+        self.terminal_combobox.pack(fill='x', pady=(0, 6))
         self.terminal_combobox.bind('<<ComboboxSelected>>', self.on_terminal_selected)
         
         # Terminal info with modern styling
         self.terminal_info_label = ttk.Label(card, text="Click 'Scan' to find terminals", 
-                                           style='Status.TLabel', font=('Segoe UI', 9))
+                                           style='Status.TLabel', font=('Segoe UI', 8))
         self.terminal_info_label.pack(fill='x')
 
     def create_trading_card(self, parent):
         """Create trading control card"""
-        card = self.create_card(parent, "▶️ Trading Control", width=280)
-        card.pack(side='left', padx=(0, 15))
+        card = self.create_card(parent, "▶️ Trading Control", width=240)
+        card.pack(side='left', padx=(0, 12))
         
         # Trading buttons
         btn_frame = tk.Frame(card, bg=self.COLORS['bg_secondary'])
-        btn_frame.pack(fill='x', pady=10)
+        btn_frame.pack(fill='x', pady=8)
         
         self.start_btn = ttk.Button(btn_frame, text="▶️ Start Trading", 
                                    command=self.start_trading, style='Success.TButton')
-        self.start_btn.pack(side='left', padx=(0, 10), fill='x', expand=True)
+        self.start_btn.pack(side='left', padx=(0, 8), fill='x', expand=True)
         
         self.stop_btn = ttk.Button(btn_frame, text="⏹️ Stop Trading", 
                                   command=self.stop_trading, style='Danger.TButton')
@@ -6437,21 +6437,21 @@ class TradingGUI:
 
     def create_live_stats_card(self, parent):
         """Create live statistics card"""
-        card = self.create_card(parent, "📊 Live Stats", width=300)
+        card = self.create_card(parent, "📊 Live Stats", width=260)
         card.pack(side='right')
         
         # Portfolio health with progress indicator
         health_frame = tk.Frame(card, bg=self.COLORS['bg_secondary'])
-        health_frame.pack(fill='x', pady=(0, 8))
+        health_frame.pack(fill='x', pady=(0, 6))
         
         self.portfolio_label = ttk.Label(health_frame, text="💼 Portfolio Health", 
                                         style='Status.TLabel')
         self.portfolio_label.pack(anchor='w')
         
-        # Health progress bar
-        self.health_canvas = tk.Canvas(health_frame, width=250, height=8,
+        # Health progress bar (smaller)
+        self.health_canvas = tk.Canvas(health_frame, width=220, height=6,
                                      bg=self.COLORS['bg_accent'], highlightthickness=0)
-        self.health_canvas.pack(fill='x', pady=(5, 0))
+        self.health_canvas.pack(fill='x', pady=(4, 0))
         
         # Volume balance with visual indicator
         volume_frame = tk.Frame(card, bg=self.COLORS['bg_secondary'])
@@ -6461,10 +6461,10 @@ class TradingGUI:
                                      style='Status.TLabel')
         self.volume_label.pack(anchor='w')
         
-        # Volume visualization
-        self.volume_canvas = tk.Canvas(volume_frame, width=250, height=30,
+        # Volume visualization (smaller)
+        self.volume_canvas = tk.Canvas(volume_frame, width=220, height=25,
                                      bg=self.COLORS['bg_accent'], highlightthickness=0)
-        self.volume_canvas.pack(fill='x', pady=(5, 0))
+        self.volume_canvas.pack(fill='x', pady=(4, 0))
 
     def create_card(self, parent, title, width=None, height=None):
         """Create a modern card container with shadow effect"""
@@ -6475,8 +6475,8 @@ class TradingGUI:
         if height:
             card_container.configure(height=height)
         
-        # Shadow effect
-        shadow = tk.Frame(card_container, bg=self.COLORS['card_shadow'], height=3)
+        # Shadow effect (smaller)
+        shadow = tk.Frame(card_container, bg=self.COLORS['card_shadow'], height=2)
         shadow.pack(side='bottom', fill='x')
         
         # Main card
@@ -6489,19 +6489,19 @@ class TradingGUI:
         header.pack(fill='x')
         
         title_label = ttk.Label(header, text=title, style='CardTitle.TLabel')
-        title_label.pack(side='left', padx=15, pady=10)
+        title_label.pack(side='left', padx=12, pady=8)
         
-        # Card content area
+        # Card content area with reduced padding
         content = tk.Frame(card, bg=self.COLORS['bg_secondary'])
-        content.pack(fill='both', expand=True, padx=15, pady=15)
+        content.pack(fill='both', expand=True, padx=12, pady=12)
         
         return content
 
     def create_data_section(self):
         """Create modern data section with enhanced positions table"""
-        # Data section container
+        # Data section container with reduced padding
         data_container = tk.Frame(self.root, bg=self.COLORS['bg_primary'])
-        data_container.pack(fill='both', expand=True, padx=20, pady=10)
+        data_container.pack(fill='both', expand=True, padx=15, pady=8)
         
         # Positions card
         positions_card = self.create_large_card(data_container, "📊 Active Positions")
@@ -6509,7 +6509,7 @@ class TradingGUI:
         
         # Positions toolbar
         toolbar = tk.Frame(positions_card, bg=self.COLORS['bg_secondary'])
-        toolbar.pack(fill='x', pady=(0, 10))
+        toolbar.pack(fill='x', pady=(0, 8))
         
         # Position count indicator
         self.pos_count_label = ttk.Label(toolbar, text="Positions: 0/50", 
@@ -6528,21 +6528,22 @@ class TradingGUI:
         columns = ('Ticket', 'Type', 'Volume', 'Open Price', 'Current Price', 
                   'Profit $', '$/Lot', 'Role', 'Efficiency', 'Status')
         
+        # More compact treeview
         self.positions_tree = ttk.Treeview(tree_frame, columns=columns, show='headings', 
-                                         style='Modern.Treeview', height=12)
+                                         style='Modern.Treeview', height=8)
         
-        # Configure columns with proper widths and alignment
+        # Configure columns with smaller widths
         column_configs = {
-            'Ticket': {'width': 80, 'anchor': 'center'},
-            'Type': {'width': 60, 'anchor': 'center'},
-            'Volume': {'width': 80, 'anchor': 'center'},
-            'Open Price': {'width': 90, 'anchor': 'e'},
-            'Current Price': {'width': 90, 'anchor': 'e'},
-            'Profit $': {'width': 90, 'anchor': 'e'},
-            '$/Lot': {'width': 80, 'anchor': 'e'},
-            'Role': {'width': 80, 'anchor': 'center'},
-            'Efficiency': {'width': 90, 'anchor': 'center'},
-            'Status': {'width': 80, 'anchor': 'center'}
+            'Ticket': {'width': 70, 'anchor': 'center'},
+            'Type': {'width': 50, 'anchor': 'center'},
+            'Volume': {'width': 70, 'anchor': 'center'},
+            'Open Price': {'width': 80, 'anchor': 'e'},
+            'Current Price': {'width': 80, 'anchor': 'e'},
+            'Profit $': {'width': 80, 'anchor': 'e'},
+            '$/Lot': {'width': 70, 'anchor': 'e'},
+            'Role': {'width': 70, 'anchor': 'center'},
+            'Efficiency': {'width': 80, 'anchor': 'center'},
+            'Status': {'width': 70, 'anchor': 'center'}
         }
         
         for col in columns:
@@ -6591,8 +6592,8 @@ class TradingGUI:
         # Card container
         card_container = tk.Frame(parent, bg=self.COLORS['bg_primary'])
         
-        # Shadow effect
-        shadow = tk.Frame(card_container, bg=self.COLORS['card_shadow'], height=3)
+        # Shadow effect (smaller)
+        shadow = tk.Frame(card_container, bg=self.COLORS['card_shadow'], height=2)
         shadow.pack(side='bottom', fill='x')
         
         # Main card
@@ -6600,47 +6601,47 @@ class TradingGUI:
                        relief='flat', bd=0)
         card.pack(fill='both', expand=True)
         
-        # Card header with modern styling
+        # Card header with modern styling (reduced padding)
         header = tk.Frame(card, bg=self.COLORS['bg_accent'])
         header.pack(fill='x')
         
         title_label = ttk.Label(header, text=title, style='CardTitle.TLabel',
-                               font=('Segoe UI', 14, 'bold'))
-        title_label.pack(side='left', padx=20, pady=12)
+                               font=('Segoe UI', 12, 'bold'))
+        title_label.pack(side='left', padx=15, pady=10)
         
-        # Card content area
+        # Card content area with reduced padding
         content = tk.Frame(card, bg=self.COLORS['bg_secondary'])
-        content.pack(fill='both', expand=True, padx=20, pady=20)
+        content.pack(fill='both', expand=True, padx=15, pady=15)
         
         return content
 
     def create_analytics_dashboard(self):
         """Create modern analytics dashboard with cards and visualizations"""
-        # Analytics container
+        # Analytics container with reduced padding
         analytics_container = tk.Frame(self.root, bg=self.COLORS['bg_primary'])
-        analytics_container.pack(fill='x', padx=20, pady=10)
+        analytics_container.pack(fill='x', padx=15, pady=8)
         
         # Analytics cards row
         cards_row = tk.Frame(analytics_container, bg=self.COLORS['bg_primary'])
         cards_row.pack(fill='x')
         
-        # Trading Statistics Card
-        stats_card = self.create_card(cards_row, "📈 Trading Statistics", width=380)
-        stats_card.pack(side='left', padx=(0, 15))
+        # Trading Statistics Card (smaller)
+        stats_card = self.create_card(cards_row, "📈 Trading Statistics", width=320)
+        stats_card.pack(side='left', padx=(0, 12))
         
-        self.stats_text = tk.Text(stats_card, height=6, bg=self.COLORS['bg_accent'], 
-                                 fg=self.COLORS['text_primary'], font=('Consolas', 9),
+        self.stats_text = tk.Text(stats_card, height=5, bg=self.COLORS['bg_accent'], 
+                                 fg=self.COLORS['text_primary'], font=('Consolas', 8),
                                  relief='flat', bd=0, wrap='word')
         self.stats_text.pack(fill='both', expand=True)
         
-        # Portfolio Visualization Card
-        portfolio_card = self.create_card(cards_row, "💼 Portfolio Overview", width=300)
-        portfolio_card.pack(side='left', padx=(0, 15))
+        # Portfolio Visualization Card (smaller)
+        portfolio_card = self.create_card(cards_row, "💼 Portfolio Overview", width=260)
+        portfolio_card.pack(side='left', padx=(0, 12))
         
-        # Mini donut chart for portfolio balance
-        self.portfolio_canvas = tk.Canvas(portfolio_card, width=250, height=120,
+        # Mini donut chart for portfolio balance (smaller)
+        self.portfolio_canvas = tk.Canvas(portfolio_card, width=220, height=100,
                                         bg=self.COLORS['bg_secondary'], highlightthickness=0)
-        self.portfolio_canvas.pack(pady=10)
+        self.portfolio_canvas.pack(pady=8)
         
         # Portfolio metrics
         metrics_frame = tk.Frame(portfolio_card, bg=self.COLORS['bg_secondary'])
@@ -6654,22 +6655,22 @@ class TradingGUI:
                                          style='Error.TLabel')
         self.sell_volume_label.pack(side='right')
         
-        # Smart Insights Card
-        insights_card = self.create_card(cards_row, "🧠 Smart Insights", width=420)
+        # Smart Insights Card (smaller)
+        insights_card = self.create_card(cards_row, "🧠 Smart Insights", width=360)
         insights_card.pack(side='right')
         
-        self.recommendations_text = tk.Text(insights_card, height=6, 
+        self.recommendations_text = tk.Text(insights_card, height=5, 
                                           bg=self.COLORS['bg_accent'], 
                                           fg=self.COLORS['accent_orange'], 
-                                          font=('Consolas', 9),
+                                          font=('Consolas', 8),
                                           relief='flat', bd=0, wrap='word')
         self.recommendations_text.pack(fill='both', expand=True)
 
     def create_log_panel(self):
         """Create modern log panel with syntax highlighting"""
-        # Log container
+        # Log container with reduced padding
         log_container = tk.Frame(self.root, bg=self.COLORS['bg_primary'])
-        log_container.pack(fill='x', padx=20, pady=(10, 20))
+        log_container.pack(fill='x', padx=15, pady=(8, 15))
         
         # Log card
         log_card = self.create_large_card(log_container, "📝 System Log")
@@ -6677,7 +6678,7 @@ class TradingGUI:
         
         # Log controls
         controls_frame = tk.Frame(log_card, bg=self.COLORS['bg_secondary'])
-        controls_frame.pack(fill='x', pady=(0, 10))
+        controls_frame.pack(fill='x', pady=(0, 8))
         
         # Log level indicator
         self.log_level_label = ttk.Label(controls_frame, text="Log Level: INFO", 
@@ -6689,14 +6690,14 @@ class TradingGUI:
                               command=self.clear_log, style='Modern.TButton')
         clear_btn.pack(side='right')
         
-        # Enhanced log text with modern styling
+        # Enhanced log text with modern styling (reduced height)
         log_frame = tk.Frame(log_card, bg=self.COLORS['bg_secondary'])
         log_frame.pack(fill='both', expand=True)
         
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=8, 
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=6, 
                                                 bg=self.COLORS['bg_accent'], 
                                                 fg=self.COLORS['text_primary'],
-                                                font=('Consolas', 9),
+                                                font=('Consolas', 8),
                                                 relief='flat', bd=0,
                                                 wrap='word')
         self.log_text.pack(fill='both', expand=True)
