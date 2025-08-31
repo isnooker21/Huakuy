@@ -6476,8 +6476,10 @@ class TradingGUI:
         card_container = tk.Frame(parent, bg=self.COLORS['bg_primary'])
         if width:
             card_container.configure(width=width)
+            card_container.pack_propagate(False)  # Maintain fixed width
         if height:
             card_container.configure(height=height)
+            card_container.pack_propagate(False)  # Maintain fixed height
         
         # Main card (pack first to ensure proper layout)
         card = tk.Frame(card_container, bg=self.COLORS['bg_secondary'], 
@@ -7138,78 +7140,6 @@ class TradingGUI:
             self.start_btn.config(state='normal')
             self.stop_btn.config(state='disabled')
             messagebox.showinfo("Success", "Trading stopped")
-
-    def update_terminal_list(self, terminals):
-        """Update terminal list from scan results"""
-        try:
-            self.trading_system.available_terminals = terminals
-            
-            # Update combobox
-            terminal_names = [terminal['display_name'] for terminal in terminals]
-            self.terminal_combobox['values'] = terminal_names
-            
-            if terminals:
-                self.terminal_combobox.set(terminal_names[0])  # Select first terminal
-                self.on_terminal_selected()  # Update info display
-                self.terminal_info_label.config(text=f"Found {len(terminals)} terminal(s)")
-            else:
-                self.terminal_info_label.config(text="No terminals found")
-            
-            self.scan_btn.config(state='normal', text='🔍 Scan')
-            self.refresh_btn.config(state='normal')
-            
-        except Exception as e:
-            self.scan_error(str(e))
-    
-    def scan_error(self, error_msg):
-        """Handle scan error"""
-        self.scan_btn.config(state='normal', text='🔍 Scan')
-        self.refresh_btn.config(state='normal')
-        self.terminal_info_label.config(text="Scan failed")
-        messagebox.showerror("Scan Error", f"Failed to scan terminals: {error_msg}")
-    
-    def on_terminal_selected(self, event=None):
-        """Handle terminal selection"""
-        try:
-            selected_name = self.terminal_var.get()
-            if not selected_name or not self.trading_system.available_terminals:
-                return
-            
-            # Find selected terminal
-            selected_terminal = None
-            for terminal in self.trading_system.available_terminals:
-                if terminal['display_name'] == selected_name:
-                    selected_terminal = terminal
-                    break
-            
-            if selected_terminal:
-                self.trading_system.selected_terminal = selected_terminal
-                
-                # Update info display
-                info_text = f"Login: {selected_terminal['login']} | Server: {selected_terminal['server']}"
-                if len(info_text) > 35:
-                    info_text = info_text[:32] + "..."
-                
-                self.terminal_info_label.config(text=info_text)
-                
-        except Exception as e:
-            self.terminal_info_label.config(text="Selection error")
-            self.trading_system.log(f"Terminal selection error: {str(e)}", "ERROR")
-
-    def connection_complete(self, success, terminal_name):
-        """Handle connection completion"""
-        self.connect_btn.config(state='normal', text='🔌 Connect MT5')
-        
-        if success:
-            self.connection_status.config(text="✅ Connected", foreground='#00ff00')
-            messagebox.showinfo("Success", f"Connected to {terminal_name}")
-        else:
-            messagebox.showerror("Error", f"Failed to connect to {terminal_name}")
-    
-    def connection_error(self, error_msg):
-        """Handle connection error"""
-        self.connect_btn.config(state='normal', text='🔌 Connect MT5')
-        messagebox.showerror("Connection Error", f"Failed to connect: {error_msg}")
 
     def update_positions_display(self):
         """Update positions in the modern treeview"""
