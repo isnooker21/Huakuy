@@ -14,6 +14,8 @@ from enum import Enum
 import queue
 import os
 import pickle
+import subprocess
+import platform
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -186,6 +188,11 @@ class TradingSystem:
         self.circuit_breaker_timeout = 300  # 5 minutes before retry
         self.circuit_breaker_open = False
         self.circuit_breaker_last_failure = None
+
+        # 🖥️ Terminal Selection System
+        self.available_terminals = []
+        self.selected_terminal = None
+        self.terminal_scan_in_progress = False
 
         # 🛡️ Anti-Exposure Protection System
         self.anti_exposure_enabled = True
@@ -422,6 +429,299 @@ class TradingSystem:
                     self.filling_type = mt5.ORDER_FILLING_IOC  # Safe default
                 
                 self.log(f"✅ Connected to MT5 - Account: {account_info.login}")
+                self.log(f"Balance: ${account_info.balance:.2f}, Equity: ${account_info.equity:.2f}")
+                self.log(f"Trade allowed: {account_info.trade_allowed}")
+                
+                # Initialize connection health tracking
+                self.last_mt5_ping = datetime.now()
+                self.connection_failures = 0
+                
+                return True
+                
+            except ValidationError as e:
+                self.log(f"Validation error in MT5 connection: {e}", "ERROR")
+                return False
+            except Exception as e:
+                self.log(f"MT5 connection error (attempt {attempt + 1}): {str(e)}", "ERROR")
+                if attempt < max_retries - 1:
+                    self.log(f"Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 1.5
+                    continue
+                
+        self.log("All MT5 connection attempts failed", "ERROR")
+        return False
+    
+    def scan_available_terminals(self) -> List[Dict]:
+        """Scan for available MT5 terminals across different platforms"""
+        terminals = []
+        try:
+            import os
+            import subprocess
+            import platform
+            
+            self.log("🔍 Scanning for available MT5 terminals...")
+            system = platform.system()
+            self.log(f"📊 Detected platform: {system}")
+            
+            if system == "Windows":
+                terminals = self._scan_windows_terminals()
+            elif system == "Linux":
+                terminals = self._scan_linux_terminals()
+            elif system == "Darwin":  # macOS
+                terminals = self._scan_macos_terminals()
+            else:
+                self.log(f"⚠️ Unsupported platform: {system}", "WARNING")
+                terminals = self._get_default_terminal()
+            
+            # If no terminals found, provide default option
+            if not terminals:
+                self.log("📋 No running terminals found, adding default option")
+                terminals = self._get_default_terminal()
+            
+            self.log(f"📊 Terminal scan completed: {len(terminals)} terminal(s) found")
+            return terminals
+            
+        except Exception as e:
+            self.log(f"❌ Error scanning terminals: {str(e)}", "ERROR")
+            return self._get_default_terminal()
+    
+    def _scan_windows_terminals(self) -> List[Dict]:
+        """Scan for MT5 terminals on Windows"""
+        terminals = []
+        try:
+            # Use tasklist to find running MT5 processes
+            result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq terminal64.exe', '/FO', 'CSV'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0 and 'terminal64.exe' in result.stdout:
+                self.log("✅ Found running MT5 terminal process")
+                lines = result.stdout.strip().split('\n')[1:]  # Skip header
+                
+                for line in lines:
+                    if 'terminal64.exe' in line:
+                        # Try to get terminal info by connecting
+                        terminal_data = self._get_running_terminal_info()
+                        if terminal_data:
+                            terminals.append(terminal_data)
+                            break
+                            
+        except subprocess.TimeoutExpired:
+            self.log("⏰ Terminal scan timeout", "WARNING")
+        except FileNotFoundError:
+            self.log("⚠️ tasklist command not found (not Windows?)", "WARNING")
+        except Exception as e:
+            self.log(f"❌ Windows terminal scan error: {e}", "ERROR")
+            
+        return terminals
+    
+    def _scan_linux_terminals(self) -> List[Dict]:
+        """Scan for MT5 terminals on Linux (Wine)"""
+        terminals = []
+        try:
+            # Look for wine processes running MT5
+            result = subprocess.run(['pgrep', '-f', 'terminal64.exe'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                self.log("✅ Found MT5 terminal process under Wine")
+                terminal_data = self._get_running_terminal_info()
+                if terminal_data:
+                    terminals.append(terminal_data)
+                    
+        except subprocess.TimeoutExpired:
+            self.log("⏰ Linux terminal scan timeout", "WARNING")
+        except FileNotFoundError:
+            self.log("⚠️ pgrep command not found", "WARNING")
+        except Exception as e:
+            self.log(f"❌ Linux terminal scan error: {e}", "ERROR")
+            
+        return terminals
+    
+    def _scan_macos_terminals(self) -> List[Dict]:
+        """Scan for MT5 terminals on macOS (Wine)"""
+        terminals = []
+        try:
+            # Similar to Linux, look for wine processes
+            result = subprocess.run(['pgrep', '-f', 'terminal64.exe'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                self.log("✅ Found MT5 terminal process under Wine")
+                terminal_data = self._get_running_terminal_info()
+                if terminal_data:
+                    terminals.append(terminal_data)
+                    
+        except Exception as e:
+            self.log(f"❌ macOS terminal scan error: {e}", "ERROR")
+            
+        return terminals
+    
+    def _get_running_terminal_info(self) -> Dict:
+        """Try to connect to running terminal and get info"""
+        try:
+            # Temporarily connect to get terminal info
+            if mt5.initialize():
+                terminal_info = mt5.terminal_info()
+                account_info = mt5.account_info()
+                
+                terminal_data = {
+                    'path': 'default',  # Running terminal
+                    'login': account_info.login if account_info else 'Unknown',
+                    'server': account_info.server if account_info else 'Unknown',
+                    'company': terminal_info.company if terminal_info else 'Unknown',
+                    'name': terminal_info.name if terminal_info else 'MetaTrader 5',
+                    'build': terminal_info.build if terminal_info else 'Unknown',
+                    'connected': terminal_info.connected if terminal_info else False,
+                    'display_name': f"MT5 - {account_info.login}@{account_info.server}" if account_info else "MT5 Terminal"
+                }
+                
+                mt5.shutdown()
+                self.log(f"✅ Retrieved terminal info: {terminal_data['display_name']}")
+                return terminal_data
+                
+        except Exception as e:
+            self.log(f"⚠️ Could not get running terminal info: {e}", "WARNING")
+            try:
+                mt5.shutdown()  # Ensure cleanup
+            except:
+                pass
+                
+        return None
+    
+    def _get_default_terminal(self) -> List[Dict]:
+        """Get default terminal option when no terminals are found"""
+        return [{
+            'path': 'default',
+            'login': 'Not Connected',
+            'server': 'Not Connected', 
+            'company': 'Unknown',
+            'name': 'MetaTrader 5',
+            'build': 'Unknown',
+            'connected': False,
+            'display_name': 'Default MT5 Terminal'
+        }]
+    
+    def get_terminal_info(self, terminal_path: str) -> Dict:
+        """Get detailed information about a specific terminal"""
+        try:
+            if terminal_path == 'default':
+                # Try to connect and get info
+                if mt5.initialize():
+                    terminal_info = mt5.terminal_info()
+                    account_info = mt5.account_info()
+                    
+                    info = {
+                        'terminal_info': {
+                            'company': terminal_info.company if terminal_info else 'Unknown',
+                            'name': terminal_info.name if terminal_info else 'MetaTrader 5',
+                            'path': terminal_info.path if terminal_info else 'Unknown',
+                            'build': terminal_info.build if terminal_info else 'Unknown',
+                            'connected': terminal_info.connected if terminal_info else False
+                        },
+                        'account_info': {
+                            'login': account_info.login if account_info else 'Unknown',
+                            'server': account_info.server if account_info else 'Unknown',
+                            'trade_allowed': account_info.trade_allowed if account_info else False,
+                            'balance': account_info.balance if account_info else 0.0,
+                            'equity': account_info.equity if account_info else 0.0
+                        }
+                    }
+                    mt5.shutdown()
+                    return info
+            
+            return {
+                'terminal_info': {
+                    'company': 'Unknown',
+                    'name': 'MetaTrader 5', 
+                    'path': terminal_path,
+                    'build': 'Unknown',
+                    'connected': False
+                },
+                'account_info': {
+                    'login': 'Unknown',
+                    'server': 'Unknown',
+                    'trade_allowed': False,
+                    'balance': 0.0,
+                    'equity': 0.0
+                }
+            }
+            
+        except Exception as e:
+            self.log(f"Error getting terminal info for {terminal_path}: {str(e)}", "ERROR")
+            return {
+                'terminal_info': {'company': 'Error', 'name': 'Error', 'path': terminal_path, 'build': 'Error', 'connected': False},
+                'account_info': {'login': 'Error', 'server': 'Error', 'trade_allowed': False, 'balance': 0.0, 'equity': 0.0}
+            }
+    
+    def connect_to_specific_terminal(self, terminal_path: str, max_retries: int = 3, retry_delay: float = 2.0) -> bool:
+        """Connect to a specific MT5 terminal"""
+        for attempt in range(max_retries):
+            try:
+                # Validate inputs
+                if max_retries < 1:
+                    raise ValidationError("max_retries must be at least 1")
+                if retry_delay < 0:
+                    raise ValidationError("retry_delay cannot be negative")
+                
+                self.log(f"Connecting to terminal: {terminal_path} (attempt {attempt + 1}/{max_retries})")
+                
+                # Initialize MT5 with specific terminal path if provided
+                if terminal_path and terminal_path != 'default':
+                    if not mt5.initialize(path=terminal_path):
+                        error_code = mt5.last_error()
+                        self.log(f"MT5 initialization failed for {terminal_path}: {error_code}", "ERROR")
+                        if attempt < max_retries - 1:
+                            self.log(f"Retrying in {retry_delay} seconds...")
+                            time.sleep(retry_delay)
+                            retry_delay *= 1.5
+                            continue
+                        return False
+                else:
+                    # Use default initialization
+                    if not mt5.initialize():
+                        error_code = mt5.last_error()
+                        self.log(f"MT5 initialization failed: {error_code}", "ERROR")
+                        if attempt < max_retries - 1:
+                            self.log(f"Retrying in {retry_delay} seconds...")
+                            time.sleep(retry_delay)
+                            retry_delay *= 1.5
+                            continue
+                        return False
+                
+                # Validate connection with account info
+                account_info = mt5.account_info()
+                if account_info is None:
+                    error_code = mt5.last_error()
+                    self.log(f"Failed to get account info: {error_code}", "ERROR")
+                    mt5.shutdown()
+                    if attempt < max_retries - 1:
+                        self.log(f"Retrying in {retry_delay} seconds...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 1.5
+                        continue
+                    return False
+                
+                # Validate account state
+                if account_info.trade_allowed is False:
+                    self.log("Trading is not allowed on this account", "ERROR")
+                    mt5.shutdown()
+                    return False
+                
+                # Connection successful
+                self.mt5_connected = True
+                
+                # Auto-detect filling type after connection
+                try:
+                    self.filling_type = self.detect_broker_filling_type()
+                except Exception as e:
+                    self.log(f"Warning: Could not detect filling type: {e}", "WARNING")
+                    self.filling_type = mt5.ORDER_FILLING_IOC  # Safe default
+                
+                # Get terminal info for logging
+                terminal_info = mt5.terminal_info()
+                self.log(f"✅ Connected to MT5 Terminal - {terminal_info.name if terminal_info else 'Unknown'}")
+                self.log(f"Account: {account_info.login}@{account_info.server}")
                 self.log(f"Balance: ${account_info.balance:.2f}, Equity: ${account_info.equity:.2f}")
                 self.log(f"Trade allowed: {account_info.trade_allowed}")
                 
@@ -5667,6 +5967,9 @@ class TradingGUI:
         self.create_log_frame()
         
         self.trading_system.root = self.root
+        
+        # Auto-scan for terminals on startup (after a short delay)
+        self.root.after(1000, self.auto_scan_terminals)
 
     def create_header(self):
         """Create header with title and connection status"""
@@ -5700,6 +6003,36 @@ class TradingGUI:
                                         command=self.disconnect_mt5, style='Custom.TButton')
         self.disconnect_btn.pack(side='left', padx=5)
         
+        # Terminal selection frame  
+        terminal_frame = tk.Frame(control_frame, bg='#3b3b3b')
+        terminal_frame.pack(side='left', padx=15, pady=10)
+        
+        # Buttons frame for scan and refresh
+        buttons_frame = tk.Frame(terminal_frame, bg='#3b3b3b')
+        buttons_frame.pack(side='top', pady=2)
+        
+        # Scan terminals button
+        self.scan_btn = ttk.Button(buttons_frame, text="🔍 Scan", 
+                                  command=self.scan_terminals, style='Custom.TButton')
+        self.scan_btn.pack(side='left', padx=2)
+        
+        # Refresh terminals button
+        self.refresh_btn = ttk.Button(buttons_frame, text="🔄 Refresh", 
+                                     command=self.refresh_terminals, style='Custom.TButton')
+        self.refresh_btn.pack(side='left', padx=2)
+        
+        # Terminal selection dropdown
+        self.terminal_var = tk.StringVar()
+        self.terminal_combobox = ttk.Combobox(terminal_frame, textvariable=self.terminal_var, 
+                                            state='readonly', width=25, font=('Arial', 8))
+        self.terminal_combobox.pack(side='top', pady=2)
+        self.terminal_combobox.bind('<<ComboboxSelected>>', self.on_terminal_selected)
+        
+        # Terminal info label
+        self.terminal_info_label = ttk.Label(terminal_frame, text="Click 'Scan' to find terminals", 
+                                           style='Status.TLabel', font=('Arial', 8))
+        self.terminal_info_label.pack(side='top', pady=2)
+
         # Trading buttons
         trade_frame = tk.Frame(control_frame, bg='#3b3b3b')
         trade_frame.pack(side='left', padx=20, pady=10)
@@ -5781,13 +6114,168 @@ class TradingGUI:
                                                  font=('Consolas', 9))
         self.log_text.pack(fill='both', expand=True, padx=5, pady=5)
 
+    def scan_terminals(self):
+        """Scan for available MT5 terminals"""
+        try:
+            self.scan_btn.config(state='disabled', text='🔍 Scanning...')
+            self.refresh_btn.config(state='disabled')
+            self.terminal_combobox.set('')
+            self.terminal_info_label.config(text="Scanning terminals...")
+            
+            # Update UI to show scanning state
+            self.root.update()
+            
+            # Scan terminals in a separate thread to prevent UI blocking
+            def scan_thread():
+                try:
+                    terminals = self.trading_system.scan_available_terminals()
+                    
+                    # Update UI in main thread
+                    self.root.after(0, self.update_terminal_list, terminals)
+                except Exception as e:
+                    self.root.after(0, self.scan_error, str(e))
+            
+            threading.Thread(target=scan_thread, daemon=True).start()
+            
+        except Exception as e:
+            self.scan_btn.config(state='normal', text='🔍 Scan')
+            self.refresh_btn.config(state='normal')
+            messagebox.showerror("Error", f"Failed to scan terminals: {str(e)}")
+    
+    def update_terminal_list(self, terminals):
+        """Update terminal list from scan results"""
+        try:
+            self.trading_system.available_terminals = terminals
+            
+            # Update combobox
+            terminal_names = [terminal['display_name'] for terminal in terminals]
+            self.terminal_combobox['values'] = terminal_names
+            
+            if terminals:
+                self.terminal_combobox.set(terminal_names[0])  # Select first terminal
+                self.on_terminal_selected()  # Update info display
+                self.terminal_info_label.config(text=f"Found {len(terminals)} terminal(s)")
+            else:
+                self.terminal_info_label.config(text="No terminals found")
+            
+            self.scan_btn.config(state='normal', text='🔍 Scan')
+            self.refresh_btn.config(state='normal')
+            
+        except Exception as e:
+            self.scan_error(str(e))
+    
+    def scan_error(self, error_msg):
+        """Handle scan error"""
+        self.scan_btn.config(state='normal', text='🔍 Scan')
+        self.refresh_btn.config(state='normal')
+        self.terminal_info_label.config(text="Scan failed")
+        messagebox.showerror("Scan Error", f"Failed to scan terminals: {error_msg}")
+    
+    def on_terminal_selected(self, event=None):
+        """Handle terminal selection"""
+        try:
+            selected_name = self.terminal_var.get()
+            if not selected_name or not self.trading_system.available_terminals:
+                return
+            
+            # Find selected terminal
+            selected_terminal = None
+            for terminal in self.trading_system.available_terminals:
+                if terminal['display_name'] == selected_name:
+                    selected_terminal = terminal
+                    break
+            
+            if selected_terminal:
+                self.trading_system.selected_terminal = selected_terminal
+                
+                # Update info display
+                info_text = f"Login: {selected_terminal['login']} | Server: {selected_terminal['server']}"
+                if len(info_text) > 35:
+                    info_text = info_text[:32] + "..."
+                
+                self.terminal_info_label.config(text=info_text)
+                
+        except Exception as e:
+            self.terminal_info_label.config(text="Selection error")
+            self.trading_system.log(f"Terminal selection error: {str(e)}", "ERROR")
+
     def connect_mt5(self):
-        """Connect to MT5"""
-        if self.trading_system.connect_mt5():
+        """Connect to selected MT5 terminal"""
+        try:
+            # Check if a terminal is selected
+            if not self.trading_system.selected_terminal:
+                # Show dialog to scan first
+                result = messagebox.askyesno("No Terminal Selected", 
+                                           "No MT5 terminal selected. Would you like to scan for terminals first?")
+                if result:
+                    self.scan_terminals()
+                    return
+                else:
+                    # Try default connection
+                    if self.trading_system.connect_mt5():
+                        self.connection_status.config(text="✅ Connected", foreground='#00ff00')
+                        messagebox.showinfo("Success", "Connected to MetaTrader 5 (Default)")
+                    else:
+                        messagebox.showerror("Error", "Failed to connect to MetaTrader 5")
+                    return
+            
+            # Connect to selected terminal
+            terminal_path = self.trading_system.selected_terminal.get('path', 'default')
+            display_name = self.trading_system.selected_terminal.get('display_name', 'Unknown')
+            
+            self.connect_btn.config(state='disabled', text='🔌 Connecting...')
+            self.root.update()
+            
+            # Connect in separate thread to prevent UI blocking
+            def connect_thread():
+                try:
+                    success = self.trading_system.connect_to_specific_terminal(terminal_path)
+                    self.root.after(0, self.connection_complete, success, display_name)
+                except Exception as e:
+                    self.root.after(0, self.connection_error, str(e))
+            
+            threading.Thread(target=connect_thread, daemon=True).start()
+            
+        except Exception as e:
+            self.connect_btn.config(state='normal', text='🔌 Connect MT5')
+            messagebox.showerror("Error", f"Connection error: {str(e)}")
+    
+    def connection_complete(self, success, terminal_name):
+        """Handle connection completion"""
+        self.connect_btn.config(state='normal', text='🔌 Connect MT5')
+        
+        if success:
             self.connection_status.config(text="✅ Connected", foreground='#00ff00')
-            messagebox.showinfo("Success", "Connected to MetaTrader 5")
+            messagebox.showinfo("Success", f"Connected to {terminal_name}")
         else:
-            messagebox.showerror("Error", "Failed to connect to MetaTrader 5")
+            messagebox.showerror("Error", f"Failed to connect to {terminal_name}")
+    
+    def connection_error(self, error_msg):
+        """Handle connection error"""
+        self.connect_btn.config(state='normal', text='🔌 Connect MT5')
+        messagebox.showerror("Connection Error", f"Failed to connect: {error_msg}")
+
+    def auto_scan_terminals(self):
+        """Automatically scan for terminals on startup"""
+        try:
+            self.terminal_info_label.config(text="Auto-scanning terminals...")
+            self.scan_terminals()
+        except Exception as e:
+            self.trading_system.log(f"Auto-scan error: {str(e)}", "ERROR")
+            self.terminal_info_label.config(text="Auto-scan failed")
+
+    def refresh_terminals(self):
+        """Refresh the terminal list"""
+        try:
+            if self.scan_btn.cget('state') == 'disabled':
+                # Scan already in progress
+                return
+                
+            self.terminal_info_label.config(text="Refreshing terminals...")
+            self.scan_terminals()
+        except Exception as e:
+            self.trading_system.log(f"Refresh error: {str(e)}", "ERROR")
+            self.terminal_info_label.config(text="Refresh failed")
 
     def disconnect_mt5(self):
         """Disconnect from MT5"""
