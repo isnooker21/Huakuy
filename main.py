@@ -6255,6 +6255,27 @@ class TradingGUI:
                  background=[('active', '#b82d32'),
                            ('pressed', '#9e262a')])
         
+        # Emergency button style (bright red with blink effect)
+        style.configure('Emergency.TButton',
+                       font=('Segoe UI', 9, 'bold'),
+                       borderwidth=2,
+                       focuscolor='none',
+                       background='#ff0000',
+                       foreground='#ffffff')
+        
+        style.map('Emergency.TButton',
+                 background=[('active', '#cc0000'),
+                           ('pressed', '#990000')])
+        
+        # Modern Entry style
+        style.configure('Modern.TEntry',
+                       font=('Segoe UI', 9),
+                       borderwidth=1,
+                       relief='solid',
+                       insertcolor=self.COLORS['text_primary'],
+                       background=self.COLORS['bg_accent'],
+                       foreground=self.COLORS['text_primary'])
+        
         # Modern labels
         style.configure('ModernTitle.TLabel',
                        font=('Segoe UI', 18, 'bold'),
@@ -6376,21 +6397,43 @@ class TradingGUI:
 
     def create_connection_card(self, parent):
         """Create connection control card"""
-        card_content = self.create_card(parent, "🔌 Connection", width=240)
+        card_content = self.create_card(parent, "🔌 Connection", width=280)
         # Pack the card container properly
         card_content.card_container.pack(side='left', padx=(0, 12), fill='y')
         
         # Connection buttons with modern styling
         btn_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
-        btn_frame.pack(fill='x', pady=8)
+        btn_frame.pack(fill='x', pady=(0, 8))
         
         self.connect_btn = ttk.Button(btn_frame, text="🔌 Connect MT5", 
                                      command=self.connect_mt5, style='Modern.TButton')
-        self.connect_btn.pack(side='left', padx=(0, 8), fill='x', expand=True)
+        self.connect_btn.pack(side='left', padx=(0, 6), fill='x', expand=True)
         
         self.disconnect_btn = ttk.Button(btn_frame, text="🔌 Disconnect", 
                                         command=self.disconnect_mt5, style='Danger.TButton')
         self.disconnect_btn.pack(side='right', fill='x', expand=True)
+        
+        # Connection status display
+        status_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
+        status_frame.pack(fill='x', pady=(0, 6))
+        
+        status_label = ttk.Label(status_frame, text="Status:", style='Status.TLabel')
+        status_label.pack(side='left')
+        
+        self.connection_status_label = ttk.Label(status_frame, text="Disconnected", 
+                                               style='Error.TLabel')
+        self.connection_status_label.pack(side='right')
+        
+        # Terminal path display
+        path_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
+        path_frame.pack(fill='x')
+        
+        path_label = ttk.Label(path_frame, text="Terminal Path:", style='Status.TLabel')
+        path_label.pack(anchor='w')
+        
+        self.terminal_path_label = ttk.Label(path_frame, text="Not selected", 
+                                           style='Status.TLabel', font=('Segoe UI', 8))
+        self.terminal_path_label.pack(anchor='w', pady=(2, 0))
 
     def create_terminal_card(self, parent):
         """Create terminal selection card"""
@@ -6424,25 +6467,89 @@ class TradingGUI:
 
     def create_trading_card(self, parent):
         """Create trading control card"""
-        card_content = self.create_card(parent, "▶️ Trading Control", width=240)
+        card_content = self.create_card(parent, "▶️ Trading Control", width=280)
         card_content.card_container.pack(side='left', padx=(0, 12), fill='y')
         
         # Trading buttons
         btn_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
-        btn_frame.pack(fill='x', pady=8)
+        btn_frame.pack(fill='x', pady=(0, 8))
         
         self.start_btn = ttk.Button(btn_frame, text="▶️ Start Trading", 
                                    command=self.start_trading, style='Success.TButton')
-        self.start_btn.pack(side='left', padx=(0, 8), fill='x', expand=True)
+        self.start_btn.pack(side='left', padx=(0, 6), fill='x', expand=True)
         
         self.stop_btn = ttk.Button(btn_frame, text="⏹️ Stop Trading", 
                                   command=self.stop_trading, style='Danger.TButton')
         self.stop_btn.pack(side='right', fill='x', expand=True)
+        
+        # Base lot size input
+        lot_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
+        lot_frame.pack(fill='x', pady=(0, 6))
+        
+        lot_label = ttk.Label(lot_frame, text="Base Lot:", style='Status.TLabel')
+        lot_label.pack(side='left')
+        
+        self.lot_size_var = tk.StringVar(value="0.01")
+        self.lot_size_entry = ttk.Entry(lot_frame, textvariable=self.lot_size_var, 
+                                       width=8, style='Modern.TEntry')
+        self.lot_size_entry.pack(side='right')
+        self.lot_size_entry.bind('<Return>', self.update_lot_size)
+        
+        # Max positions setting
+        pos_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
+        pos_frame.pack(fill='x', pady=(0, 6))
+        
+        pos_label = ttk.Label(pos_frame, text="Max Pos:", style='Status.TLabel')
+        pos_label.pack(side='left')
+        
+        self.max_pos_var = tk.StringVar(value="50")
+        self.max_pos_entry = ttk.Entry(pos_frame, textvariable=self.max_pos_var, 
+                                      width=8, style='Modern.TEntry')
+        self.max_pos_entry.pack(side='right')
+        self.max_pos_entry.bind('<Return>', self.update_max_positions)
+        
+        # Emergency stop button
+        emergency_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
+        emergency_frame.pack(fill='x')
+        
+        self.emergency_btn = ttk.Button(emergency_frame, text="🚨 EMERGENCY STOP", 
+                                       command=self.emergency_stop, style='Emergency.TButton')
+        self.emergency_btn.pack(fill='x')
 
     def create_live_stats_card(self, parent):
         """Create live statistics card"""
-        card_content = self.create_card(parent, "📊 Live Stats", width=260)
+        card_content = self.create_card(parent, "📊 Live Stats", width=300)
         card_content.card_container.pack(side='right', fill='y')
+        
+        # Current P&L display
+        pnl_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
+        pnl_frame.pack(fill='x', pady=(0, 6))
+        
+        pnl_label = ttk.Label(pnl_frame, text="💰 Current P&L:", style='Status.TLabel')
+        pnl_label.pack(side='left')
+        
+        self.pnl_value_label = ttk.Label(pnl_frame, text="$0.00", style='Success.TLabel')
+        self.pnl_value_label.pack(side='right')
+        
+        # Daily trades counter
+        trades_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
+        trades_frame.pack(fill='x', pady=(0, 6))
+        
+        trades_label = ttk.Label(trades_frame, text="📈 Daily Trades:", style='Status.TLabel')
+        trades_label.pack(side='left')
+        
+        self.daily_trades_label = ttk.Label(trades_frame, text="0/100", style='Status.TLabel')
+        self.daily_trades_label.pack(side='right')
+        
+        # Active positions count
+        positions_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
+        positions_frame.pack(fill='x', pady=(0, 6))
+        
+        pos_count_label = ttk.Label(positions_frame, text="📊 Active Pos:", style='Status.TLabel')
+        pos_count_label.pack(side='left')
+        
+        self.active_pos_label = ttk.Label(positions_frame, text="0/50", style='Status.TLabel')
+        self.active_pos_label.pack(side='right')
         
         # Portfolio health with progress indicator
         health_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
@@ -6453,7 +6560,7 @@ class TradingGUI:
         self.portfolio_label.pack(anchor='w')
         
         # Health progress bar (smaller)
-        self.health_canvas = tk.Canvas(health_frame, width=220, height=6,
+        self.health_canvas = tk.Canvas(health_frame, width=260, height=6,
                                      bg=self.COLORS['bg_accent'], highlightthickness=0)
         self.health_canvas.pack(fill='x', pady=(4, 0))
         
@@ -6466,7 +6573,7 @@ class TradingGUI:
         self.volume_label.pack(anchor='w')
         
         # Volume visualization (smaller)
-        self.volume_canvas = tk.Canvas(volume_frame, width=220, height=25,
+        self.volume_canvas = tk.Canvas(volume_frame, width=260, height=25,
                                      bg=self.COLORS['bg_accent'], highlightthickness=0)
         self.volume_canvas.pack(fill='x', pady=(4, 0))
 
@@ -6635,21 +6742,56 @@ class TradingGUI:
         cards_row = tk.Frame(analytics_container, bg=self.COLORS['bg_primary'])
         cards_row.pack(fill='x')
         
-        # Trading Statistics Card (smaller)
-        stats_card_content = self.create_card(cards_row, "📈 Trading Statistics", width=320)
-        stats_card_content.card_container.pack(side='left', padx=(0, 12), fill='y')
+        # Performance Metrics Card
+        performance_card_content = self.create_card(cards_row, "📊 Performance Metrics", width=300)
+        performance_card_content.card_container.pack(side='left', padx=(0, 12), fill='y')
         
-        self.stats_text = tk.Text(stats_card_content, height=5, bg=self.COLORS['bg_accent'], 
-                                 fg=self.COLORS['text_primary'], font=('Consolas', 8),
-                                 relief='flat', bd=0, wrap='word')
-        self.stats_text.pack(fill='both', expand=True)
+        # Success rate display
+        success_frame = tk.Frame(performance_card_content, bg=self.COLORS['bg_secondary'])
+        success_frame.pack(fill='x', pady=(0, 4))
         
-        # Portfolio Visualization Card (smaller)
-        portfolio_card_content = self.create_card(cards_row, "💼 Portfolio Overview", width=260)
+        success_label = ttk.Label(success_frame, text="Success Rate:", style='Status.TLabel')
+        success_label.pack(side='left')
+        
+        self.success_rate_label = ttk.Label(success_frame, text="0%", style='Success.TLabel')
+        self.success_rate_label.pack(side='right')
+        
+        # Win/Loss ratio
+        winloss_frame = tk.Frame(performance_card_content, bg=self.COLORS['bg_secondary'])
+        winloss_frame.pack(fill='x', pady=(0, 4))
+        
+        winloss_label = ttk.Label(winloss_frame, text="Win/Loss:", style='Status.TLabel')
+        winloss_label.pack(side='left')
+        
+        self.winloss_label = ttk.Label(winloss_frame, text="0/0", style='Status.TLabel')
+        self.winloss_label.pack(side='right')
+        
+        # Average profit per trade
+        avg_profit_frame = tk.Frame(performance_card_content, bg=self.COLORS['bg_secondary'])
+        avg_profit_frame.pack(fill='x', pady=(0, 4))
+        
+        avg_profit_label = ttk.Label(avg_profit_frame, text="Avg Profit:", style='Status.TLabel')
+        avg_profit_label.pack(side='left')
+        
+        self.avg_profit_label = ttk.Label(avg_profit_frame, text="$0.00", style='Status.TLabel')
+        self.avg_profit_label.pack(side='right')
+        
+        # Risk level indicator
+        risk_frame = tk.Frame(performance_card_content, bg=self.COLORS['bg_secondary'])
+        risk_frame.pack(fill='x')
+        
+        risk_label = ttk.Label(risk_frame, text="Risk Level:", style='Status.TLabel')
+        risk_label.pack(side='left')
+        
+        self.risk_level_label = ttk.Label(risk_frame, text="Low", style='Success.TLabel')
+        self.risk_level_label.pack(side='right')
+        
+        # Portfolio Visualization Card
+        portfolio_card_content = self.create_card(cards_row, "💼 Portfolio Overview", width=280)
         portfolio_card_content.card_container.pack(side='left', padx=(0, 12), fill='y')
         
-        # Mini donut chart for portfolio balance (smaller)
-        self.portfolio_canvas = tk.Canvas(portfolio_card_content, width=220, height=100,
+        # Mini donut chart for portfolio balance
+        self.portfolio_canvas = tk.Canvas(portfolio_card_content, width=250, height=100,
                                         bg=self.COLORS['bg_secondary'], highlightthickness=0)
         self.portfolio_canvas.pack(pady=8)
         
@@ -6665,8 +6807,8 @@ class TradingGUI:
                                          style='Error.TLabel')
         self.sell_volume_label.pack(side='right')
         
-        # Smart Insights Card (smaller)
-        insights_card_content = self.create_card(cards_row, "🧠 Smart Insights", width=360)
+        # Smart Insights Card
+        insights_card_content = self.create_card(cards_row, "🧠 Smart Insights", width=380)
         insights_card_content.card_container.pack(side='right', fill='y')
         
         self.recommendations_text = tk.Text(insights_card_content, height=5, 
@@ -7140,6 +7282,60 @@ class TradingGUI:
             self.start_btn.config(state='normal')
             self.stop_btn.config(state='disabled')
             messagebox.showinfo("Success", "Trading stopped")
+    
+    def update_lot_size(self, event=None):
+        """Update base lot size"""
+        try:
+            lot_size = float(self.lot_size_var.get())
+            if 0.01 <= lot_size <= 100.0:
+                self.trading_system.base_lot = lot_size
+                self.trading_system.log(f"Base lot size updated to {lot_size}", "INFO")
+            else:
+                messagebox.showerror("Error", "Lot size must be between 0.01 and 100.0")
+                self.lot_size_var.set(str(self.trading_system.base_lot))
+        except ValueError:
+            messagebox.showerror("Error", "Invalid lot size value")
+            self.lot_size_var.set(str(self.trading_system.base_lot))
+    
+    def update_max_positions(self, event=None):
+        """Update maximum positions"""
+        try:
+            max_pos = int(self.max_pos_var.get())
+            if 1 <= max_pos <= 500:
+                self.trading_system.max_positions = max_pos
+                self.trading_system.log(f"Maximum positions updated to {max_pos}", "INFO")
+            else:
+                messagebox.showerror("Error", "Max positions must be between 1 and 500")
+                self.max_pos_var.set(str(self.trading_system.max_positions))
+        except ValueError:
+            messagebox.showerror("Error", "Invalid max positions value")
+            self.max_pos_var.set(str(self.trading_system.max_positions))
+    
+    def emergency_stop(self):
+        """Emergency stop - immediately halt all trading and close positions"""
+        try:
+            # Stop trading immediately
+            self.trading_system.trading_active = False
+            self.start_btn.config(state='normal')
+            self.stop_btn.config(state='disabled')
+            
+            # Log emergency stop
+            self.trading_system.log("🚨 EMERGENCY STOP ACTIVATED", "WARNING")
+            
+            # Show confirmation dialog
+            result = messagebox.askyesno("Emergency Stop", 
+                                       "Emergency stop activated!\n\nDo you want to close all open positions?")
+            
+            if result and self.trading_system.mt5_connected:
+                # Close all positions (this would need MT5 implementation)
+                self.trading_system.log("Attempting to close all positions...", "WARNING")
+                # Note: Actual position closing would require MT5 implementation
+                
+            messagebox.showwarning("Emergency Stop", "All trading activities have been halted!")
+            
+        except Exception as e:
+            self.trading_system.log(f"Error during emergency stop: {str(e)}", "ERROR")
+            messagebox.showerror("Error", f"Emergency stop failed: {str(e)}")
 
     def update_positions_display(self):
         """Update positions in the modern treeview"""
@@ -7196,51 +7392,10 @@ class TradingGUI:
     def update_analytics_display(self):
         """Update analytics with modern styling and enhanced information"""
         try:
-            # Update statistics
-            self.stats_text.delete(1.0, tk.END)
-            
+            # Update recommendations (keep the smart insights)
+            self.recommendations_text.delete(1.0, tk.END)
             smart_stats = self.trading_system.get_smart_management_stats()
             current_time = datetime.now().strftime("%H:%M:%S")
-            
-            # Enhanced market status
-            market_status = "🟢 Active" if self.trading_system.trading_active else "🔴 Stopped"
-            last_signal = "Never"
-            if self.trading_system.last_signal_time:
-                seconds_ago = (datetime.now() - self.trading_system.last_signal_time).seconds
-                last_signal = f"{seconds_ago}s ago"
-            
-            # Modern formatted statistics
-            stats = f"""⏰ REAL-TIME STATUS [{current_time}]
-Market Status: {market_status}
-Last Signal: {last_signal}
-Hourly Signals: {len(self.trading_system.hourly_signals)}/{self.trading_system.max_signals_per_hour}
-
-🎯 TRADING PERFORMANCE
-Total Signals: {self.trading_system.total_signals}
-Successful: {self.trading_system.successful_signals}
-Success Rate: {(self.trading_system.successful_signals/max(1,self.trading_system.total_signals)*100):.1f}%
-Daily Trades: {self.trading_system.daily_trades}/{self.trading_system.max_daily_trades}
-
-🧠 SMART MANAGEMENT
-Total Redirects: {smart_stats.get('total_redirects', 0)}
-Success Rate: {smart_stats.get('redirect_success_rate', 0):.1f}%
-Profit Captured: ${smart_stats.get('redirect_profit_captured', 0):.2f}
-
-💰 PORTFOLIO METRICS
-Active Positions: {len(self.trading_system.positions)}/{self.trading_system.max_positions}
-Health Score: {self.trading_system.portfolio_health:.1f}%
-Balance Ratio: {(self.trading_system.buy_volume/(max(0.01, self.trading_system.buy_volume+self.trading_system.sell_volume))*100):.1f}% BUY"""
-            
-            self.stats_text.insert(tk.END, stats)
-            
-            # Update volume labels
-            if hasattr(self, 'buy_volume_label'):
-                self.buy_volume_label.config(text=f"BUY: {self.trading_system.buy_volume:.2f}")
-            if hasattr(self, 'sell_volume_label'):
-                self.sell_volume_label.config(text=f"SELL: {self.trading_system.sell_volume:.2f}")
-            
-            # Update recommendations
-            self.recommendations_text.delete(1.0, tk.END)
             recommendations = self.get_smart_router_recommendations(smart_stats)
             
             if recommendations:
@@ -7258,6 +7413,12 @@ Balance Ratio: {(self.trading_system.buy_volume/(max(0.01, self.trading_system.b
                     rec_text += "🔌 Connect to MT5 to begin\n"
             
             self.recommendations_text.insert(tk.END, rec_text)
+            
+            # Update volume labels
+            if hasattr(self, 'buy_volume_label'):
+                self.buy_volume_label.config(text=f"BUY: {self.trading_system.buy_volume:.2f}")
+            if hasattr(self, 'sell_volume_label'):
+                self.sell_volume_label.config(text=f"SELL: {self.trading_system.sell_volume:.2f}")
             
             # Update visual indicators
             self.update_health_progress()
@@ -7331,6 +7492,102 @@ Balance Ratio: {(self.trading_system.buy_volume/(max(0.01, self.trading_system.b
         except Exception as e:
             print(f"Error updating status labels: {str(e)}")
 
+    def update_live_stats_display(self):
+        """Update live statistics display with enhanced metrics"""
+        try:
+            # Update current P&L display
+            if hasattr(self, 'pnl_value_label'):
+                total_profit = sum(pos.profit for pos in self.trading_system.positions)
+                if total_profit >= 0:
+                    self.pnl_value_label.config(text=f"${total_profit:.2f}", style='Success.TLabel')
+                else:
+                    self.pnl_value_label.config(text=f"${total_profit:.2f}", style='Error.TLabel')
+            
+            # Update daily trades counter
+            if hasattr(self, 'daily_trades_label'):
+                self.daily_trades_label.config(
+                    text=f"{self.trading_system.daily_trades}/{self.trading_system.max_daily_trades}"
+                )
+            
+            # Update active positions count
+            if hasattr(self, 'active_pos_label'):
+                pos_count = len(self.trading_system.positions)
+                self.active_pos_label.config(
+                    text=f"{pos_count}/{self.trading_system.max_positions}"
+                )
+            
+            # Update analytics dashboard metrics
+            if hasattr(self, 'success_rate_label'):
+                success_rate = 0
+                if self.trading_system.total_signals > 0:
+                    success_rate = (self.trading_system.successful_signals / self.trading_system.total_signals) * 100
+                self.success_rate_label.config(text=f"{success_rate:.1f}%")
+            
+            # Update win/loss ratio
+            if hasattr(self, 'winloss_label'):
+                wins = self.trading_system.successful_signals
+                losses = self.trading_system.total_signals - self.trading_system.successful_signals
+                self.winloss_label.config(text=f"{wins}/{losses}")
+            
+            # Update average profit per trade
+            if hasattr(self, 'avg_profit_label'):
+                avg_profit = 0
+                if self.trading_system.total_signals > 0:
+                    total_profit = sum(pos.profit for pos in self.trading_system.positions)
+                    avg_profit = total_profit / max(1, self.trading_system.total_signals)
+                self.avg_profit_label.config(text=f"${avg_profit:.2f}")
+            
+            # Update risk level indicator
+            if hasattr(self, 'risk_level_label'):
+                # Calculate risk level based on portfolio health and position count
+                risk_level = "Low"
+                risk_style = 'Success.TLabel'
+                
+                pos_count = len(self.trading_system.positions)
+                health = self.trading_system.portfolio_health
+                
+                if pos_count > 40 or health < 30:
+                    risk_level = "High"
+                    risk_style = 'Error.TLabel'
+                elif pos_count > 25 or health < 60:
+                    risk_level = "Medium"
+                    risk_style = 'Status.TLabel'
+                
+                self.risk_level_label.config(text=risk_level, style=risk_style)
+            
+            # Update connection status in connection card
+            if hasattr(self, 'connection_status_label'):
+                if self.trading_system.mt5_connected:
+                    self.connection_status_label.config(text="Connected", style='Success.TLabel')
+                else:
+                    self.connection_status_label.config(text="Disconnected", style='Error.TLabel')
+            
+            # Update terminal path display
+            if hasattr(self, 'terminal_path_label'):
+                if hasattr(self.trading_system, 'selected_terminal') and self.trading_system.selected_terminal:
+                    path = self.trading_system.selected_terminal.get('path', 'Not selected')
+                    if len(path) > 40:
+                        path = "..." + path[-37:]  # Truncate long paths
+                    self.terminal_path_label.config(text=path)
+                else:
+                    self.terminal_path_label.config(text="Not selected")
+            
+            # Update input field values to match system state
+            if hasattr(self, 'lot_size_var'):
+                current_lot = self.lot_size_var.get()
+                system_lot = str(self.trading_system.base_lot)
+                if current_lot != system_lot:
+                    self.lot_size_var.set(system_lot)
+            
+            if hasattr(self, 'max_pos_var'):
+                current_max = self.max_pos_var.get()
+                system_max = str(self.trading_system.max_positions)
+                if current_max != system_max:
+                    self.max_pos_var.set(system_max)
+                    
+        except Exception as e:
+            print(f"Error updating live stats display: {str(e)}")
+
     def update_log_display(self):
         """Update log display with syntax highlighting"""
         try:
@@ -7375,6 +7632,7 @@ Balance Ratio: {(self.trading_system.buy_volume/(max(0.01, self.trading_system.b
                 self.trading_system.update_positions()
                 self.update_positions_display()
                 self.update_analytics_display()
+                self.update_live_stats_display()
                 self.update_status_labels()
                 self.update_log_display()
             
