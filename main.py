@@ -1562,7 +1562,7 @@ class TradingSystem:
                         self.log(f"❌ Order failed (attempt {attempt + 1}): {result.retcode} - {error_description}", "WARNING")
                         
                         # Check if error suggests connection issue
-                        if result.retcode in [mt5.TRADE_RETCODE_NO_CONNECTION, 
+                        if result.retcode in [mt5.TRADE_RETCODE_CONNECTION, 
                                             mt5.TRADE_RETCODE_TIMEOUT, 
                                             mt5.TRADE_RETCODE_TRADE_DISABLED]:
                             self._handle_connection_failure()
