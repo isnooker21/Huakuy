@@ -6901,34 +6901,6 @@ class TradingGUI:
             self.stop_btn.config(state='disabled')
             messagebox.showinfo("Success", "Trading stopped")
 
-    def scan_terminals(self):
-        """Scan for available MT5 terminals"""
-        try:
-            self.scan_btn.config(state='disabled', text='🔍 Scanning...')
-            self.refresh_btn.config(state='disabled')
-            self.terminal_combobox.set('')
-            self.terminal_info_label.config(text="Scanning terminals...")
-            
-            # Update UI to show scanning state
-            self.root.update()
-            
-            # Scan terminals in a separate thread to prevent UI blocking
-            def scan_thread():
-                try:
-                    terminals = self.trading_system.scan_available_terminals()
-                    
-                    # Update UI in main thread
-                    self.root.after(0, self.update_terminal_list, terminals)
-                except Exception as e:
-                    self.root.after(0, self.scan_error, str(e))
-            
-            threading.Thread(target=scan_thread, daemon=True).start()
-            
-        except Exception as e:
-            self.scan_btn.config(state='normal', text='🔍 Scan')
-            self.refresh_btn.config(state='normal')
-            messagebox.showerror("Error", f"Failed to scan terminals: {str(e)}")
-    
     def update_terminal_list(self, terminals):
         """Update terminal list from scan results"""
         try:
@@ -6986,47 +6958,6 @@ class TradingGUI:
             self.terminal_info_label.config(text="Selection error")
             self.trading_system.log(f"Terminal selection error: {str(e)}", "ERROR")
 
-    def connect_mt5(self):
-        """Connect to selected MT5 terminal"""
-        try:
-            # Check if a terminal is selected
-            if not self.trading_system.selected_terminal:
-                # Show dialog to scan first
-                result = messagebox.askyesno("No Terminal Selected", 
-                                           "No MT5 terminal selected. Would you like to scan for terminals first?")
-                if result:
-                    self.scan_terminals()
-                    return
-                else:
-                    # Try default connection
-                    if self.trading_system.connect_mt5():
-                        self.connection_status.config(text="✅ Connected", foreground='#00ff00')
-                        messagebox.showinfo("Success", "Connected to MetaTrader 5 (Default)")
-                    else:
-                        messagebox.showerror("Error", "Failed to connect to MetaTrader 5")
-                    return
-            
-            # Connect to selected terminal
-            terminal_path = self.trading_system.selected_terminal.get('path', 'default')
-            display_name = self.trading_system.selected_terminal.get('display_name', 'Unknown')
-            
-            self.connect_btn.config(state='disabled', text='🔌 Connecting...')
-            self.root.update()
-            
-            # Connect in separate thread to prevent UI blocking
-            def connect_thread():
-                try:
-                    success = self.trading_system.connect_to_specific_terminal(terminal_path)
-                    self.root.after(0, self.connection_complete, success, display_name)
-                except Exception as e:
-                    self.root.after(0, self.connection_error, str(e))
-            
-            threading.Thread(target=connect_thread, daemon=True).start()
-            
-        except Exception as e:
-            self.connect_btn.config(state='normal', text='🔌 Connect MT5')
-            messagebox.showerror("Error", f"Connection error: {str(e)}")
-    
     def connection_complete(self, success, terminal_name):
         """Handle connection completion"""
         self.connect_btn.config(state='normal', text='🔌 Connect MT5')
