@@ -111,17 +111,24 @@ class InputValidator:
     
     @staticmethod
     def validate_symbol(symbol: str) -> str:
-        """Validate trading symbol"""
+        """Validate trading symbol with case preservation for XAUUSD variants"""
         if not isinstance(symbol, str):
             raise ValidationError(f"Symbol must be string, got {type(symbol)}")
         
-        symbol = symbol.strip().upper()
+        symbol = symbol.strip()
         if not symbol:
             raise ValidationError("Symbol cannot be empty")
         if len(symbol) < 3 or len(symbol) > 20:
             raise ValidationError(f"Symbol length must be 3-20 characters, got {len(symbol)}")
         
-        return symbol
+        # FIXED: Preserve case for XAUUSD symbols (e.g., XAUUSD.v should stay lowercase)
+        # Only uppercase non-XAUUSD symbols to maintain backward compatibility
+        if symbol.upper().startswith('XAUUSD') or symbol.upper().startswith('GOLD'):
+            # Preserve original case for gold/XAUUSD symbols to support case-sensitive brokers
+            return symbol
+        else:
+            # Convert other symbols to uppercase for backward compatibility
+            return symbol.upper()
     
     @staticmethod
     def validate_price(price: float, min_price: float = 0.0001) -> float:
