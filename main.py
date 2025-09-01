@@ -196,7 +196,7 @@ class TradingSystem:
         self.config = {
             "trading_parameters": {
                 "symbol": "XAUUSD.v",
-                "fallback_symbols": ["XAUUSD.v", "XAUUSD", "XAUUSD.c", "XAUUSD.V"],  # FIXED: Prioritize lowercase detected symbols
+                "fallback_symbols": ["XAUUSD.v", "XAUUSD"],  # Simplified fallback logic: try only XAUUSD if XAUUSD.v is not found
                 "base_lot_size": 0.01,
                 "max_lot_size": 0.1,
                 "max_positions": 50,
@@ -233,7 +233,7 @@ class TradingSystem:
                 "connection_timeout": 10,
                 "symbol_verification_enabled": True,
                 "fallback_enabled": True,
-                "auto_detection_enabled": True,  # Enable XAUUSD auto-detection
+                "auto_detection_enabled": False,  # Temporarily disabled until case sensitivity is resolved
                 "auto_detection_scan_interval": 3600,  # Rescan symbols every hour
                 "auto_detection_patterns": [
                     r'^XAUUSD$',           # Exact match
@@ -251,16 +251,17 @@ class TradingSystem:
                 "max_execution_time_ms": 50
             },
             "order_execution": {
-                "max_retry_attempts": 5,
+                "max_retry_attempts": 3,  # Reduced from 5 to 3
                 "base_retry_delay": 0.5,
                 "max_retry_delay": 8.0,
                 "exponential_backoff": True,
-                "price_staleness_threshold": 5.0,  # seconds
-                "price_deviation_threshold": 1.0,   # percentage
-                "connection_health_check_on_retry": True,
+                "price_staleness_threshold": 10.0,  # Increased from 5 to 10 seconds
+                "price_deviation_threshold": 2.0,   # Increased from 1.0% to 2.0%
+                "connection_health_check_on_retry": False,  # Removed complex connection health checks
                 "validation_enabled": True,
                 "execution_timeout": 30.0,  # seconds
-                "detailed_logging": True
+                "detailed_logging": True,
+                "magic_number": 234000  # Single magic number for all orders
             }
         }
         
@@ -1143,7 +1144,7 @@ class TradingSystem:
             return False
 
     def detect_broker_filling_type(self) -> int:
-        """Auto-detect broker's supported filling type with enhanced symbol validation"""
+        """Hard-coded broker filling type with IOC as default and RETURN as fallback"""
         if not MT5_AVAILABLE:
             self.log("MT5 not available - using mock filling type", "WARNING")
             return 0  # Mock value
@@ -1152,43 +1153,15 @@ class TradingSystem:
             return mt5.ORDER_FILLING_IOC
             
         try:
-            # Get symbol info to check filling modes with enhanced retry
-            symbol_info = self.get_symbol_info_with_retry(self.current_symbol)
-            if symbol_info is None:
-                self.log(f"Cannot get symbol info for {self.current_symbol}, trying fallbacks", "WARNING")
-                
-                # Try fallback symbols for filling type detection
-                for fallback_symbol in self.fallback_symbols:
-                    symbol_info = self.get_symbol_info_with_retry(fallback_symbol)
-                    if symbol_info is not None:
-                        self.log(f"Using {fallback_symbol} for filling type detection", "INFO")
-                        break
-                
-                if symbol_info is None:
-                    self.log("Cannot get symbol info for any symbol", "WARNING")
-                    return mt5.ORDER_FILLING_IOC
-            
-            filling_modes = symbol_info.filling_mode
-            
-            # Check each filling type in priority order
-            for filling_type in self.filling_types_priority:
-                if filling_modes & filling_type:
-                    filling_name = {
-                        mt5.ORDER_FILLING_IOC: "IOC (Immediate or Cancel)",
-                        mt5.ORDER_FILLING_FOK: "FOK (Fill or Kill)",
-                        mt5.ORDER_FILLING_RETURN: "RETURN (Default)"
-                    }.get(filling_type, f"Unknown ({filling_type})")
-                    
-                    self.log(f"✅ Detected broker filling type: {filling_name}")
-                    return filling_type
-            
-            # Fallback to RETURN if nothing else works
-            self.log("⚠️ Using fallback filling type: RETURN", "WARNING")
-            return mt5.ORDER_FILLING_RETURN
+            # Hard-coded ORDER_FILLING_IOC as the default filling type
+            self.log("✅ Using hard-coded filling type: IOC (Immediate or Cancel)")
+            return mt5.ORDER_FILLING_IOC
             
         except Exception as e:
-            self.log(f"Error detecting filling type: {str(e)}", "ERROR")
-            return mt5.ORDER_FILLING_IOC
+            self.log(f"Error with filling type: {str(e)}", "ERROR")
+            # Fallback to RETURN if IOC fails
+            self.log("⚠️ Using fallback filling type: RETURN", "WARNING")
+            return mt5.ORDER_FILLING_RETURN
 
     def connect_mt5(self, max_retries: int = 3, retry_delay: float = 2.0) -> bool:
         """Connect to MetaTrader 5 with retry mechanism and validation"""
@@ -3440,7 +3413,7 @@ class TradingSystem:
                 "type": order_type,
                 "price": price,  # Add current market price
                 "deviation": 20,
-                "magic": 123456,
+                "magic": self.config["order_execution"]["magic_number"],
                 "comment": f"AI_Smart_{signal.strength:.1f}",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": self.filling_type,
@@ -4964,7 +4937,7 @@ class TradingSystem:
                 "type": close_type,
                 "position": position.ticket,
                 "deviation": 20,
-                "magic": 123456,
+                "magic": self.config["order_execution"]["magic_number"],
                 "comment": f"Smart_Redirect_{original_signal.direction[:1]}",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": self.filling_type,
@@ -5242,7 +5215,7 @@ class TradingSystem:
                 "type": close_type,
                 "position": position.ticket,
                 "deviation": 20,
-                "magic": 123456,
+                "magic": self.config["order_execution"]["magic_number"],
                 "comment": f"Smart_{reason[:12]}",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": self.filling_type,
@@ -6356,7 +6329,7 @@ class TradingSystem:
                 "volume": hedge_volume,
                 "type": hedge_type,
                 "deviation": 20,
-                "magic": 123457,  # ใช้ magic number ต่างจาก trade ปกติ
+                "magic": self.config["order_execution"]["magic_number"],  # Use single magic number for all orders
                 "comment": f"HG_{position.ticket}_{strategy[:4]}",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": self.filling_type,
@@ -8600,7 +8573,7 @@ class TradingSystem:
             return {}
 
     def _validate_order_prerequisites(self, request: dict) -> Tuple[bool, str]:
-        """Comprehensive pre-order validation to catch issues before sending orders"""
+        """Simplified pre-order validation with basic checks only"""
         try:
             # Check if validation is enabled
             if not self.config["order_execution"]["validation_enabled"]:
@@ -8612,75 +8585,16 @@ class TradingSystem:
                 if field not in request:
                     return False, f"Missing required field: {field}"
             
-            # 2. Connection health validation (reduced from retry logic)
+            # 2. Connection validation
             if not self.mt5_connected:
                 return False, "MT5 not connected"
             
-            # Skip redundant connection health check if we're in retry context
-            # The retry logic will handle connection issues appropriately
-            
-            # 3. Circuit breaker check
-            if self.circuit_breaker_open:
-                return False, "Circuit breaker is open - trading temporarily disabled"
-            
-            # 4. Symbol validation - use cached symbol info if available to reduce calls
-            symbol = request["symbol"]
-            symbol_info = mt5.symbol_info(symbol)  # Single call instead of retry logic
-            if symbol_info is None:
-                return False, f"Symbol {symbol} not available"
-            
-            # Only check/fix Market Watch selection if symbol is not visible
-            if not symbol_info.visible:
-                self.log(f"Symbol {symbol} not visible, attempting to select in Market Watch", "INFO")
-                if not mt5.symbol_select(symbol, True):
-                    return False, f"Cannot select symbol {symbol} in Market Watch"
-                
-                # Quick re-verification after selection
-                symbol_info = mt5.symbol_info(symbol)
-                if symbol_info is None or not symbol_info.visible:
-                    return False, f"Symbol {symbol} still not available after Market Watch selection"
-            
-            # 5. Volume validation
+            # 3. Volume validation (basic)
             volume = request["volume"]
             if volume <= 0:
                 return False, f"Invalid volume: {volume}"
             
-            if hasattr(symbol_info, 'volume_min') and volume < symbol_info.volume_min:
-                return False, f"Volume {volume} below minimum {symbol_info.volume_min}"
-            
-            if hasattr(symbol_info, 'volume_max') and volume > symbol_info.volume_max:
-                return False, f"Volume {volume} exceeds maximum {symbol_info.volume_max}"
-            
-            # 6. Market hours validation (if trading hours are restricted)
-            if hasattr(symbol_info, 'trade_mode') and symbol_info.trade_mode == mt5.SYMBOL_TRADE_MODE_DISABLED:
-                return False, f"Trading disabled for symbol {symbol}"
-            
-            # 7. Price validation (for market orders) - use relaxed thresholds
-            if "price" in request:
-                price = request["price"]
-                if price <= 0:
-                    return False, f"Invalid price: {price}"
-                
-                # Get current tick to validate price freshness
-                tick = mt5.symbol_info_tick(symbol)
-                if tick is None:
-                    return False, f"Cannot get current tick data for {symbol}"
-                
-                # Relaxed price staleness check (configurable threshold)
-                staleness_threshold = self.config["order_execution"]["price_staleness_threshold"]
-                if hasattr(tick, 'time') and (time.time() - tick.time) > staleness_threshold:
-                    return False, f"Tick data is stale (>{staleness_threshold}s old)"
-                
-                # More lenient price reasonableness check for volatile markets
-                deviation_threshold = self.config["order_execution"]["price_deviation_threshold"]
-                current_price = tick.bid if request["type"] == mt5.ORDER_TYPE_SELL else tick.ask
-                if current_price > 0:  # Avoid division by zero
-                    price_diff_pct = abs(price - current_price) / current_price * 100
-                    if price_diff_pct > deviation_threshold:
-                        self.log(f"⚠️ Price {price} differs from market {current_price} by {price_diff_pct:.2f}% (threshold: {deviation_threshold}%)", "WARNING")
-                        # For order execution, we'll allow this but warn - the market may have moved
-            
-            # 8. Basic account validation (simplified)
+            # 4. Basic account validation
             account_info = mt5.account_info()
             if account_info is None:
                 return False, "Cannot get account information"
@@ -8688,8 +8602,8 @@ class TradingSystem:
             if hasattr(account_info, 'trade_allowed') and not account_info.trade_allowed:
                 return False, "Trading not allowed on this account"
             
-            # All validations passed
-            return True, "All prerequisites validated successfully"
+            # All basic validations passed
+            return True, "Basic prerequisites validated successfully"
             
         except Exception as e:
             return False, f"Validation error: {str(e)}"
@@ -8714,7 +8628,7 @@ class TradingSystem:
         return None
 
     def _execute_order_with_retry(self, request: dict, max_attempts: int = None) -> Optional[Any]:
-        """Enhanced order execution with improved retry mechanism and exponential backoff"""
+        """Simplified order execution with basic retry mechanism"""
         start_time = time.time()
         
         # Use configuration settings
@@ -8724,42 +8638,25 @@ class TradingSystem:
         base_delay = self.config["order_execution"]["base_retry_delay"]
         max_delay = self.config["order_execution"]["max_retry_delay"]
         use_exponential_backoff = self.config["order_execution"]["exponential_backoff"]
-        check_health_on_retry = self.config["order_execution"]["connection_health_check_on_retry"]
         detailed_logging = self.config["order_execution"]["detailed_logging"]
-        
-        # Track if we've already had a connection failure to avoid redundant health checks
-        connection_failed_once = False
         
         for attempt in range(max_attempts):
             attempt_start = time.time()
             
             try:
-                # Pre-order connection health check only after first connection failure
-                if attempt > 0 and check_health_on_retry and connection_failed_once:
-                    if not self.check_mt5_connection_health(include_symbol_check=False):
-                        self.log(f"Connection health check failed before retry {attempt + 1}", "WARNING")
-                        if attempt < max_attempts - 1:
-                            # Use simpler delay calculation for connection issues
-                            delay = min(base_delay * (1 + attempt * 0.5), max_delay)
-                            time.sleep(delay)
-                            continue
-                        return None
-                
                 # Send the order
                 result = mt5.order_send(request)
                 execution_time = (time.time() - attempt_start) * 1000  # Convert to ms
                 
                 if result is None:
                     self.log(f"❌ Order send returned None (attempt {attempt + 1}) - took {execution_time:.1f}ms", "WARNING")
-                    # Mark connection as potentially problematic
-                    connection_failed_once = True
                     
                     if attempt < max_attempts - 1:
-                        # Use more conservative backoff for None returns
+                        # Use conservative backoff for None returns
                         if use_exponential_backoff:
-                            delay = min(base_delay * (1.5 ** attempt), max_delay)  # Less aggressive than 2^attempt
+                            delay = min(base_delay * (1.5 ** attempt), max_delay)
                         else:
-                            delay = min(base_delay + (attempt * 0.3), max_delay)  # Smaller increments
+                            delay = min(base_delay + (attempt * 0.3), max_delay)
                         
                         # Simple jitter to prevent thundering herd
                         jitter = random.uniform(0.1, 0.3)
@@ -8788,10 +8685,6 @@ class TradingSystem:
                     error_desc = self._get_trade_error_description(result.retcode)
                     self.log(f"🔄 Transient error: {error_desc} (code: {result.retcode}) - attempt {attempt + 1}, took {execution_time:.1f}ms", "WARNING")
                     
-                    # Mark connection as potentially problematic for connection-related errors
-                    if result.retcode in [mt5.TRADE_RETCODE_CONNECTION, mt5.TRADE_RETCODE_TIMEOUT, mt5.TRADE_RETCODE_TRADE_TIMEOUT]:
-                        connection_failed_once = True
-                    
                     if attempt < max_attempts - 1:
                         # Update price for retry if price-related error
                         if result.retcode in [mt5.TRADE_RETCODE_REQUOTE, mt5.TRADE_RETCODE_PRICE_CHANGED, mt5.TRADE_RETCODE_PRICE_OFF, mt5.TRADE_RETCODE_INVALID_PRICE]:
@@ -8807,9 +8700,8 @@ class TradingSystem:
                             else:
                                 self.log("   ⚠️ Could not update price - tick data unavailable", "WARNING")
                         
-                        # Calculate retry delay with more conservative approach
+                        # Calculate retry delay
                         if use_exponential_backoff:
-                            # More conservative exponential backoff: 0.5s → 1s → 1.5s → 2.25s → 3.4s
                             delay = min(base_delay * (1.5 ** attempt), max_delay)
                         else:
                             delay = min(base_delay + (attempt * 0.3), max_delay)
@@ -8837,9 +8729,6 @@ class TradingSystem:
             except Exception as e:
                 execution_time = (time.time() - attempt_start) * 1000
                 self.log(f"❌ Exception during order execution (attempt {attempt + 1}): {str(e)} - took {execution_time:.1f}ms", "ERROR")
-                
-                # Mark connection as potentially problematic on exceptions
-                connection_failed_once = True
                 
                 if attempt < max_attempts - 1:
                     # Use conservative backoff for exceptions
@@ -8915,6 +8804,67 @@ class TradingSystem:
         except Exception as e:
             self.log(f"Error getting enhanced system status: {str(e)}", "ERROR")
             return {'error': str(e)}
+
+    def execute_simple_order(self, signal: Signal, lot_size: float) -> bool:
+        """Emergency bypass method - execute simple orders bypassing all smart logic"""
+        try:
+            if not MT5_AVAILABLE or not self.mt5_connected:
+                self.log("❌ MT5 not available or not connected", "ERROR")
+                return False
+            
+            # Hard-coded symbol and filling type for emergency bypass
+            hardcoded_symbol = "XAUUSD.v"
+            hardcoded_filling = mt5.ORDER_FILLING_IOC
+            
+            self.log(f"🚨 Emergency order execution: {signal.direction} {lot_size} lots of {hardcoded_symbol}", "INFO")
+            
+            # Determine order type
+            order_type = mt5.ORDER_TYPE_BUY if signal.direction == "BUY" else mt5.ORDER_TYPE_SELL
+            
+            # Get simple tick data
+            tick = mt5.symbol_info_tick(hardcoded_symbol)
+            if tick is None:
+                self.log(f"❌ Cannot get tick data for {hardcoded_symbol}", "ERROR")
+                return False
+            
+            # Set price based on order type
+            price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
+            if price <= 0:
+                self.log(f"❌ Invalid price: {price}", "ERROR")
+                return False
+            
+            # Create simple order request
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": hardcoded_symbol,
+                "volume": lot_size,
+                "type": order_type,
+                "price": price,
+                "deviation": 20,
+                "magic": self.config["order_execution"]["magic_number"],
+                "comment": f"Emergency_{signal.direction}",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": hardcoded_filling,
+            }
+            
+            # Send order directly without retry logic
+            result = mt5.order_send(request)
+            
+            if result is None:
+                self.log("❌ Emergency order failed - order_send returned None", "ERROR")
+                return False
+            
+            if result.retcode == mt5.TRADE_RETCODE_DONE:
+                self.log(f"✅ Emergency order executed successfully - Ticket: {result.order}", "INFO")
+                return True
+            else:
+                error_desc = self._get_trade_error_description(result.retcode)
+                self.log(f"❌ Emergency order failed: {error_desc} (code: {result.retcode})", "ERROR")
+                return False
+                
+        except Exception as e:
+            self.log(f"❌ Exception in emergency order execution: {str(e)}", "ERROR")
+            return False
 
 class TradingGUI:
     def __init__(self):
