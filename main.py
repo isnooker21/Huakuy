@@ -183,12 +183,54 @@ class TradingSystem:
     def __init__(self):
         self.mt5_connected = False
         self.trading_active = False
-        self.symbol = "XAUUSD.v"  # เปลี่ยนจาก "XAUUSD" เป็น "XAUUSD.v"
-        self.base_lot = 0.01
-        self.max_positions = 50
-        self.min_margin_level = 200.0
-        self.signal_cooldown = 60  # seconds
-        self.max_signals_per_hour = 40
+        
+        # 🔧 Unified Configuration Dictionary - Enhanced Trading System v2.0
+        self.config = {
+            "trading_parameters": {
+                "symbol": "XAUUSD.v",
+                "base_lot_size": 0.01,
+                "max_lot_size": 0.1,
+                "max_positions": 50,
+                "min_margin_level": 200.0,
+                "signal_cooldown": 60,
+                "max_signals_per_hour": 40
+            },
+            "decision_weights": {
+                "safety_check": 0.35,
+                "portfolio_health": 0.25,
+                "zone_distribution": 0.20,
+                "balance_optimization": 0.15,
+                "signal_quality": 0.05
+            },
+            "lot_sizing": {
+                "base_lot_size": 0.01,
+                "max_lot_size": 0.10,
+                "equity_based_sizing": True,
+                "signal_strength_multiplier": True,
+                "risk_percent_range": [0.01, 0.03]
+            },
+            "zone_analysis": {
+                "cache_ttl": 30,
+                "zone_size_pips": 25,
+                "max_positions_per_zone": 3,
+                "min_position_distance_pips": 15,
+                "force_zone_diversification": True
+            },
+            "performance": {
+                "cache_enabled": True,
+                "memory_optimization": True,
+                "circuit_breaker_enabled": True,
+                "max_execution_time_ms": 50
+            }
+        }
+        
+        # Legacy compatibility - map config to existing variables
+        self.symbol = self.config["trading_parameters"]["symbol"]
+        self.base_lot = self.config["trading_parameters"]["base_lot_size"]
+        self.max_positions = self.config["trading_parameters"]["max_positions"]
+        self.min_margin_level = self.config["trading_parameters"]["min_margin_level"]
+        self.signal_cooldown = self.config["trading_parameters"]["signal_cooldown"]
+        self.max_signals_per_hour = self.config["trading_parameters"]["max_signals_per_hour"]
         
         # Trading statistics
         self.total_signals = 0
@@ -234,24 +276,24 @@ class TradingSystem:
         self.emergency_mode_threshold = 25  # portfolio health
 
         # 🎯 Zone-Based Trading System Configuration
-        self.zone_size_pips = 25  # ขนาด zone (pips)
-        self.max_positions_per_zone = 3  # จำกัดไม้ต่อ zone
-        self.min_position_distance_pips = 15  # ระยะห่างขั้นต่ำระหว่างไม้
-        self.force_zone_diversification = True  # บังคับกระจาย
+        self.zone_size_pips = self.config["zone_analysis"]["zone_size_pips"]
+        self.max_positions_per_zone = self.config["zone_analysis"]["max_positions_per_zone"]
+        self.min_position_distance_pips = self.config["zone_analysis"]["min_position_distance_pips"]
+        self.force_zone_diversification = self.config["zone_analysis"]["force_zone_diversification"]
         
         # 📊 Dynamic Lot Sizing Configuration
-        self.base_lot_size = 0.01  # lot พื้นฐาน
+        self.base_lot_size = self.config["lot_sizing"]["base_lot_size"]
         
-        # 🚀 Performance Optimization - Zone Analysis Caching
+        # 🚀 Performance Optimization - Zone Analysis Caching Enhanced
         self.zone_analysis_cache = None
         self.zone_analysis_cache_time = None
         self.zone_analysis_cache_positions_hash = None
-        self.zone_cache_ttl = 30  # seconds - cache for 30 seconds
+        self.zone_cache_ttl = self.config["zone_analysis"]["cache_ttl"]  # seconds - cache for 30 seconds
         self.zone_recalc_threshold = 0.1  # recalculate if positions change by 10%
-        self.max_lot_size = 0.10   # lot สูงสุด
+        self.max_lot_size = self.config["lot_sizing"]["max_lot_size"]
         self.lot_multiplier_range = (0.5, 3.0)  # ช่วงการคูณ lot
-        self.equity_based_sizing = True  # ปรับตาม equity
-        self.signal_strength_multiplier = True  # ปรับตาม signal strength
+        self.equity_based_sizing = self.config["lot_sizing"]["equity_based_sizing"]
+        self.signal_strength_multiplier = self.config["lot_sizing"]["signal_strength_multiplier"]
 
         # Auto-detect filling type
         self.filling_type = None
@@ -1722,8 +1764,21 @@ class TradingSystem:
             return self.base_lot_size
 
     def calculate_lot_size(self, signal: Signal) -> float:
-        """Calculate dynamic lot size - wrapper for new method"""
-        return self.calculate_dynamic_lot_size(signal)
+        """🎯 Legacy wrapper for unified lot size calculation - backward compatibility"""
+        try:
+            # Create minimal decision context for legacy support
+            decision_context = {
+                'signal': signal,
+                'factors': {},
+                'scores': {}
+            }
+            
+            # Use unified lot size calculation
+            return self.calculate_unified_lot_size(signal, decision_context)
+            
+        except Exception as e:
+            self.log(f"Error in legacy lot size calculation: {str(e)}", "ERROR")
+            return self.config["trading_parameters"]["base_lot_size"]
 
     # 🎯 Zone-Based Trading System Methods
     
@@ -2133,7 +2188,7 @@ class TradingSystem:
             return False
 
     def execute_order(self, signal: Signal) -> bool:
-        """Execute order with smart routing and comprehensive validation"""
+        """🎯 Execute order with Enhanced Trading System v2.0 - Uses Unified Decision Engine"""
         try:
             # Input validation
             if not isinstance(signal, Signal):
@@ -2167,45 +2222,304 @@ class TradingSystem:
                 self.log("❌ Circuit breaker is open, cannot execute orders", "WARNING")
                 return False
                 
-            # ใช้ Enhanced Smart Signal Router with Zone Analysis
+            # 🧠 Use Enhanced Smart Signal Router v2.0 with Unified Decision Engine
             router_result = self.smart_signal_router(signal)
             
-            # 🎯 Log zone analysis if available
+            # 📊 Enhanced logging with unified decision details
+            if 'decision_factors' in router_result['details']:
+                factors = router_result['details']['decision_factors']
+                self.log(f"🧠 Unified Decision Factors:")
+                if 'safety' in factors:
+                    health = factors['safety'].get('portfolio_health', 0)
+                    self.log(f"   Safety: Portfolio health {health:.1f}%")
+                if 'zone' in factors:
+                    zone_rec = factors['zone'].get('zone_recommendation', 'NEUTRAL')
+                    self.log(f"   Zone: {zone_rec}")
+                if 'balance' in factors:
+                    buy_vol = factors['balance'].get('buy_volume', 0)
+                    sell_vol = factors['balance'].get('sell_volume', 0)
+                    self.log(f"   Balance: {buy_vol:.2f}/{sell_vol:.2f}")
+            
+            # Log execution time performance
+            exec_time = router_result['details'].get('execution_time_ms', 0)
+            if exec_time > 0:
+                self.log(f"⚡ Decision time: {exec_time:.1f}ms")
+            
+            # 🎯 Zone analysis logging (backward compatibility)
             if 'zone_analysis' in router_result['details'] and router_result['details']['zone_analysis']:
                 zone_data = router_result['details']['zone_analysis']
-                cache_status = "📋 CACHED" if zone_data.get('cached', False) else "🔄 CALCULATED"
-                self.log(f"🗺️ Zone Analysis ({cache_status}): {zone_data['total_zones_used']} zones, score: {zone_data['distribution_score']:.1f}")
-                if zone_data['clustered_zones']:
-                    self.log(f"   ⚠️ Congested zones: {len(zone_data['clustered_zones'])}")
-                if zone_data['empty_zones']:
-                    self.log(f"   📍 Empty zones available: {len(zone_data['empty_zones'])}")
+                if isinstance(zone_data, dict) and 'total_zones_used' in zone_data:
+                    cache_status = "📋 CACHED" if zone_data.get('cached', False) else "🔄 CALCULATED"
+                    self.log(f"🗺️ Zone Analysis ({cache_status}): {zone_data['total_zones_used']} zones, score: {zone_data['distribution_score']:.1f}")
+                    if zone_data.get('clustered_zones'):
+                        cluster_count = len(zone_data['clustered_zones'])
+                        self.log(f"⚠️ Found {cluster_count} clustered zones")
             
-            if router_result['action'] == 'skip':
-                self.log(f"⏭️ Signal SKIPPED: {signal.direction} - {router_result['details']['reason']}")
-                return False
+            # 🎯 Process unified decision
+            action = router_result['action']
+            confidence = router_result['details'].get('confidence', 0.0)
+            lot_size = router_result['details'].get('lot_size', self.config["trading_parameters"]["base_lot_size"])
             
-            elif router_result['action'] == 'redirect':
-                # ดำเนินการ redirect
-                details = router_result['details']
-                target_position = details['target_position']
+            self.log(f"🎯 Unified Router Decision: {action.upper()} (confidence: {confidence:.1%}, lot: {lot_size:.2f})")
+            
+            # Execute based on unified decision
+            if action == 'execute':
+                # Use unified lot size calculation result
+                return self.execute_normal_order_v2(signal, lot_size, router_result['details'])
                 
-                success = self.execute_redirect_close(target_position, signal, details['reason'])
-                if success:
-                    self.log(f"🎯 REDIRECT SUCCESS: ${details['profit_captured']:.2f} captured")
-                    return True
+            elif action == 'redirect':
+                # Handle redirect action
+                redirect_success = self.handle_redirect_action(signal, router_result['details'])
+                if redirect_success:
+                    self.total_redirects += 1
+                    self.last_redirect_time = datetime.now()
+                    # Also execute the original signal with adjusted lot size
+                    return self.execute_normal_order_v2(signal, lot_size * 0.7, router_result['details'])  # Reduced lot for redirect
                 else:
-                    # ถ้า redirect ล้มเหลว ให้ execute ปกติ
-                    self.log("🔄 Redirect failed, executing normal order")
-            
-            # Execute ปกติ (หรือ fallback จาก redirect ที่ล้มเหลว)
-            return self.execute_normal_order(signal)
+                    # Fallback to normal execution
+                    return self.execute_normal_order_v2(signal, lot_size, router_result['details'])
+                    
+            elif action == 'skip':
+                self.log(f"🚫 Signal SKIPPED: {signal.direction} - {router_result['details']['reason']}")
+                return False
+                
+            elif action == 'close':
+                # Handle close action for portfolio health
+                close_success = self.handle_close_action(router_result['details'])
+                self.log(f"🔄 Portfolio management action executed: {close_success}")
+                # Still execute the signal with reduced lot size
+                return self.execute_normal_order_v2(signal, lot_size * 0.5, router_result['details'])
+                
+            else:
+                self.log(f"⚠️ Unknown action from unified decision engine: {action}", "WARNING")
+                return self.execute_normal_order_v2(signal, lot_size, router_result['details'])
             
         except ValidationError as e:
-            self.log(f"Validation error in execute_order: {str(e)}", "ERROR")
+            self.log(f"❌ Order validation failed: {e}", "ERROR")
             return False
         except Exception as e:
-            self.log(f"Error in execute_order: {str(e)}", "ERROR")
+            self.log(f"❌ Error executing order: {str(e)}", "ERROR")
             return False
+
+    def execute_normal_order_v2(self, signal: Signal, lot_size: float, decision_details: dict) -> bool:
+        """🚀 Enhanced normal order execution with unified lot size"""
+        try:
+            # Validate lot size
+            lot_size = self._validate_lot_size(lot_size)
+            
+            if not self.mt5_connected:
+                self.log("❌ MT5 not connected for order execution", "ERROR")
+                return False
+            
+            # Determine order type
+            order_type = mt5.ORDER_TYPE_BUY if signal.direction == "BUY" else mt5.ORDER_TYPE_SELL
+            
+            # Get current market price
+            symbol_info = mt5.symbol_info(signal.symbol)
+            if symbol_info is None:
+                self.log(f"❌ Cannot get symbol info for {signal.symbol}", "ERROR")
+                return False
+            
+            # Get current tick
+            tick = mt5.symbol_info_tick(signal.symbol)
+            if tick is None:
+                self.log(f"❌ Cannot get tick data for {signal.symbol}", "ERROR")
+                return False
+            
+            # Set price based on signal direction
+            if signal.direction == "BUY":
+                price = tick.ask
+            else:
+                price = tick.bid
+            
+            # Create order request
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": signal.symbol,
+                "volume": lot_size,
+                "type": order_type,
+                "price": price,
+                "deviation": 10,  # Allow 10 points price deviation
+                "magic": 234000,
+                "comment": f"v2.0-{signal.reason[:30]}",  # Include unified decision info
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": self.filling_type or mt5.ORDER_FILLING_IOC,
+            }
+            
+            # Execute order
+            result = mt5.order_send(request)
+            
+            if result is None:
+                self.log("❌ Order send failed - no result", "ERROR")
+                return False
+            
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                error_desc = self._get_trade_error_description(result.retcode)
+                self.log(f"❌ Order failed: {error_desc} (code: {result.retcode})", "ERROR")
+                return False
+            
+            # Log successful execution with enhanced details
+            confidence = decision_details.get('confidence', 0.0)
+            exec_time = decision_details.get('execution_time_ms', 0.0)
+            
+            self.log(f"✅ Order executed: {signal.direction} {lot_size:.2f} lots at {price:.5f}")
+            self.log(f"   Ticket: {result.order}, Confidence: {confidence:.1%}, Decision time: {exec_time:.1f}ms")
+            
+            # Update statistics
+            self.total_signals += 1
+            self.successful_signals += 1
+            self.last_signal_time = signal.timestamp
+            
+            # Update hourly signals tracking
+            current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
+            self.hourly_signals = [(time, count) for time, count in self.hourly_signals if time >= current_hour - timedelta(hours=1)]
+            
+            hourly_count = sum(count for time, count in self.hourly_signals if time == current_hour)
+            if hourly_count == 0:
+                self.hourly_signals.append((current_hour, 1))
+            else:
+                self.hourly_signals = [(time, count + 1 if time == current_hour else count) for time, count in self.hourly_signals]
+            
+            return True
+            
+        except Exception as e:
+            self.log(f"❌ Error in enhanced order execution: {str(e)}", "ERROR")
+            return False
+
+    def handle_redirect_action(self, signal: Signal, details: dict) -> bool:
+        """Handle redirect action from unified decision engine"""
+        try:
+            target_position = details.get('redirect_target')
+            if target_position:
+                # Close the target position
+                success = self.close_position_by_ticket(target_position.ticket)
+                if success:
+                    profit = target_position.profit
+                    self.redirect_profit_captured += profit
+                    self.log(f"🔄 Redirect executed: Closed position {target_position.ticket} with profit ${profit:.2f}")
+                    return True
+            
+            # Alternative: Find a profitable position to close
+            profitable_positions = [pos for pos in self.positions if pos.profit > 5.0]
+            if profitable_positions:
+                # Close the most profitable position
+                best_position = max(profitable_positions, key=lambda p: p.profit)
+                success = self.close_position_by_ticket(best_position.ticket)
+                if success:
+                    self.redirect_profit_captured += best_position.profit
+                    self.log(f"🔄 Alternative redirect: Closed best position {best_position.ticket} with profit ${best_position.profit:.2f}")
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            self.log(f"Error handling redirect action: {str(e)}", "ERROR")
+            return False
+
+    def handle_close_action(self, details: dict) -> bool:
+        """Handle close action for portfolio management"""
+        try:
+            # Close positions based on portfolio health requirements
+            positions_to_close = []
+            
+            # Find losing positions if portfolio health is critical
+            if self.portfolio_health < 30:
+                losing_positions = [pos for pos in self.positions if pos.profit < -20.0]
+                if losing_positions:
+                    # Close worst performing position
+                    worst_position = min(losing_positions, key=lambda p: p.profit)
+                    positions_to_close.append(worst_position)
+            
+            # Find profitable positions if we need to capture profit
+            profitable_positions = [pos for pos in self.positions if pos.profit > 10.0]
+            if profitable_positions and len(self.positions) > 40:
+                # Close most profitable position
+                best_position = max(profitable_positions, key=lambda p: p.profit)
+                positions_to_close.append(best_position)
+            
+            success_count = 0
+            for position in positions_to_close:
+                if self.close_position_by_ticket(position.ticket):
+                    success_count += 1
+                    self.log(f"🔄 Portfolio management: Closed position {position.ticket} (profit: ${position.profit:.2f})")
+            
+            return success_count > 0
+            
+        except Exception as e:
+            self.log(f"Error handling close action: {str(e)}", "ERROR")
+            return False
+
+    def close_position_by_ticket(self, ticket: int) -> bool:
+        """🔧 Close position by ticket number - Enhanced Trading System v2.0"""
+        try:
+            if not self.mt5_connected:
+                self.log("❌ MT5 not connected for position closing", "ERROR")
+                return False
+            
+            # Find position in our local tracking
+            position = None
+            for pos in self.positions:
+                if pos.ticket == ticket:
+                    position = pos
+                    break
+            
+            if not position:
+                self.log(f"❌ Position {ticket} not found in local tracking", "ERROR")
+                return False
+            
+            # Prepare close request
+            if position.type == "BUY":
+                order_type = mt5.ORDER_TYPE_SELL
+                price = mt5.symbol_info_tick(position.symbol).bid
+            else:
+                order_type = mt5.ORDER_TYPE_BUY
+                price = mt5.symbol_info_tick(position.symbol).ask
+            
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": position.symbol,
+                "volume": position.volume,
+                "type": order_type,
+                "position": ticket,
+                "price": price,
+                "deviation": 10,
+                "magic": 234000,
+                "comment": f"v2.0-close-{ticket}",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": self.filling_type or mt5.ORDER_FILLING_IOC,
+            }
+            
+            # Send close order
+            result = mt5.order_send(request)
+            
+            if result is None:
+                self.log(f"❌ Failed to close position {ticket} - no result", "ERROR")
+                return False
+            
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                error_desc = self._get_trade_error_description(result.retcode)
+                self.log(f"❌ Failed to close position {ticket}: {error_desc}", "ERROR")
+                return False
+            
+            # Log successful close
+            self.log(f"✅ Position {ticket} closed successfully at {price:.5f}")
+            
+            # Remove from local tracking
+            self.positions = [pos for pos in self.positions if pos.ticket != ticket]
+            
+            return True
+            
+        except Exception as e:
+            self.log(f"❌ Error closing position {ticket}: {str(e)}", "ERROR")
+            return False
+
+    def _validate_lot_size(self, lot_size: float) -> float:
+        """Validate and normalize lot size"""
+        try:
+            return InputValidator.validate_volume(lot_size)
+        except Exception as e:
+            self.log(f"Lot size validation error: {str(e)}", "ERROR")
+            return self.config["trading_parameters"]["base_lot_size"]
 
     def execute_normal_order(self, signal: Signal) -> bool:
         """Execute normal market order with comprehensive validation"""
@@ -2560,18 +2874,787 @@ class TradingSystem:
         
         return recommendations
 
+    # 🎯 Enhanced Trading System v2.0 - Unified Decision Engine
+    def unified_decision_engine(self, signal: Signal) -> dict:
+        """
+        🧠 Single point of control for all trading decisions
+        Eliminates conflicts between different decision methods
+        
+        Returns: {
+            'action': 'execute|redirect|skip|close',
+            'lot_size': float,
+            'confidence': float,
+            'reasoning': str,
+            'target_position': position or None,
+            'factors': dict
+        }
+        """
+        try:
+            start_time = datetime.now()
+            
+            # Initialize decision context
+            decision_context = {
+                'signal': signal,
+                'timestamp': start_time,
+                'factors': {},
+                'scores': {}
+            }
+            
+            # 1. Gather all decision factors with weights
+            factors = self._gather_decision_factors(signal)
+            decision_context['factors'] = factors
+            
+            # 2. Calculate weighted scores using config weights
+            weighted_scores = self._calculate_weighted_scores(factors)
+            decision_context['scores'] = weighted_scores
+            
+            # 3. Resolve any conflicts using priority matrix
+            final_decision = self.resolve_decision_conflicts(weighted_scores)
+            
+            # 4. Calculate unified lot size
+            lot_size = self.calculate_unified_lot_size(signal, decision_context)
+            
+            # 5. Generate reasoning
+            reasoning = self._generate_decision_reasoning(final_decision, factors)
+            
+            # 6. Performance tracking
+            execution_time = (datetime.now() - start_time).total_seconds() * 1000
+            self._track_decision_performance(execution_time)
+            
+            return {
+                'action': final_decision['action'],
+                'lot_size': lot_size,
+                'confidence': final_decision['confidence'],
+                'reasoning': reasoning,
+                'target_position': final_decision.get('target_position'),
+                'factors': factors,
+                'execution_time_ms': execution_time
+            }
+            
+        except Exception as e:
+            self.log(f"Error in unified decision engine: {str(e)}", "ERROR")
+            return {
+                'action': 'skip',
+                'lot_size': self.config["trading_parameters"]["base_lot_size"],
+                'confidence': 0.0,
+                'reasoning': f"Decision engine error: {str(e)}",
+                'target_position': None,
+                'factors': {},
+                'execution_time_ms': 0
+            }
+
+    def _gather_decision_factors(self, signal: Signal) -> dict:
+        """Gather all factors needed for decision making"""
+        factors = {}
+        
+        try:
+            # Safety factors (35% weight)
+            factors['safety'] = {
+                'portfolio_health': self.portfolio_health,
+                'margin_level': self._get_current_margin_level(),
+                'max_positions_check': len(self.positions) < self.max_positions,
+                'circuit_breaker_status': not getattr(self, 'circuit_breaker_open', False)
+            }
+            
+            # Portfolio health factors (25% weight)
+            factors['portfolio'] = {
+                'balance_ratio': self._calculate_balance_ratio(),
+                'total_exposure': self._calculate_total_exposure(),
+                'recent_performance': self._get_recent_performance()
+            }
+            
+            # Zone distribution factors (20% weight)
+            zone_analysis = self.get_cached_zone_analysis()
+            factors['zone'] = {
+                'zone_distribution': zone_analysis.get('zone_distribution', {}),
+                'zone_congestion': zone_analysis.get('congestion_score', 0),
+                'zone_recommendation': zone_analysis.get('recommendation', 'NEUTRAL')
+            }
+            
+            # Balance optimization factors (15% weight)
+            factors['balance'] = {
+                'buy_volume': self.buy_volume,
+                'sell_volume': self.sell_volume,
+                'balance_deviation': self._calculate_balance_deviation(),
+                'needs_rebalancing': self._needs_rebalancing()
+            }
+            
+            # Signal quality factors (5% weight)
+            factors['signal_quality'] = {
+                'strength': signal.strength,
+                'timing': self._evaluate_signal_timing(signal),
+                'market_conditions': self._evaluate_market_conditions()
+            }
+            
+        except Exception as e:
+            self.log(f"Error gathering decision factors: {str(e)}", "ERROR")
+            
+        return factors
+
+    def _calculate_weighted_scores(self, factors: dict) -> dict:
+        """Calculate weighted scores using config weights"""
+        scores = {}
+        weights = self.config["decision_weights"]
+        
+        try:
+            # Safety score (35%)
+            safety_score = self._calculate_safety_score(factors.get('safety', {}))
+            scores['safety'] = safety_score * weights['safety_check']
+            
+            # Portfolio score (25%)
+            portfolio_score = self._calculate_portfolio_score(factors.get('portfolio', {}))
+            scores['portfolio'] = portfolio_score * weights['portfolio_health']
+            
+            # Zone score (20%)
+            zone_score = self._calculate_zone_score(factors.get('zone', {}))
+            scores['zone'] = zone_score * weights['zone_distribution']
+            
+            # Balance score (15%)
+            balance_score = self._calculate_balance_score(factors.get('balance', {}))
+            scores['balance'] = balance_score * weights['balance_optimization']
+            
+            # Signal score (5%)
+            signal_score = self._calculate_signal_score(factors.get('signal_quality', {}))
+            scores['signal'] = signal_score * weights['signal_quality']
+            
+            # Total weighted score
+            scores['total'] = sum(scores.values())
+            
+        except Exception as e:
+            self.log(f"Error calculating weighted scores: {str(e)}", "ERROR")
+            scores = {'total': 0.0}
+            
+        return scores
+
+    def resolve_decision_conflicts(self, scores: dict) -> dict:
+        """
+        🔧 Intelligent conflict resolution with priority matrix
+        Priority: Safety (35%) > Portfolio (25%) > Zone (20%) > Balance (15%) > Signal (5%)
+        """
+        try:
+            decision = {
+                'action': 'skip',
+                'confidence': 0.0,
+                'priority_factor': 'safety'
+            }
+            
+            total_score = scores.get('total', 0.0)
+            
+            # Priority 1: Safety check (35% - always highest priority)
+            safety_score = scores.get('safety', 0.0)
+            if safety_score < 0.2:  # Critical safety threshold
+                decision.update({
+                    'action': 'skip',
+                    'confidence': 0.9,
+                    'priority_factor': 'safety',
+                    'reason': 'Safety constraints not met'
+                })
+                return decision
+            
+            # Priority 2: Portfolio health (25%)
+            portfolio_score = scores.get('portfolio', 0.0)
+            if portfolio_score < 0.15:  # Portfolio health critical
+                decision.update({
+                    'action': 'close',  # Consider closing positions
+                    'confidence': 0.8,
+                    'priority_factor': 'portfolio_health',
+                    'reason': 'Portfolio health requires attention'
+                })
+                return decision
+            
+            # Priority 3: Zone distribution (20%)
+            zone_score = scores.get('zone', 0.0)
+            
+            # Priority 4: Balance optimization (15%)
+            balance_score = scores.get('balance', 0.0)
+            
+            # Priority 5: Signal quality (5%)
+            signal_score = scores.get('signal', 0.0)
+            
+            # Make final decision based on total weighted score
+            if total_score >= 0.7:
+                decision.update({
+                    'action': 'execute',
+                    'confidence': min(0.95, total_score),
+                    'priority_factor': 'high_confidence',
+                    'reason': 'All factors aligned for execution'
+                })
+            elif total_score >= 0.5:
+                # Check if redirect is beneficial
+                if balance_score < 0.1 and zone_score > 0.15:
+                    decision.update({
+                        'action': 'redirect',
+                        'confidence': total_score * 0.8,
+                        'priority_factor': 'balance_optimization',
+                        'reason': 'Redirect for better balance'
+                    })
+                else:
+                    decision.update({
+                        'action': 'execute',
+                        'confidence': total_score * 0.9,
+                        'priority_factor': 'moderate_confidence',
+                        'reason': 'Moderate confidence execution'
+                    })
+            else:
+                decision.update({
+                    'action': 'skip',
+                    'confidence': 0.7,
+                    'priority_factor': 'low_confidence',
+                    'reason': 'Insufficient confidence score'
+                })
+            
+            return decision
+            
+        except Exception as e:
+            self.log(f"Error resolving decision conflicts: {str(e)}", "ERROR")
+            return {
+                'action': 'skip',
+                'confidence': 0.0,
+                'priority_factor': 'error',
+                'reason': f'Conflict resolution error: {str(e)}'
+            }
+
+    def calculate_unified_lot_size(self, signal: Signal, decision_context: dict) -> float:
+        """
+        📊 Single method for lot size calculation - eliminates conflicts
+        Uses weighted factors without redundancy
+        """
+        try:
+            # Base lot size from config
+            base_lot = self.config["lot_sizing"]["base_lot_size"]
+            max_lot = self.config["lot_sizing"]["max_lot_size"]
+            
+            # Initialize multiplier
+            lot_multiplier = 1.0
+            
+            # Factor 1: Signal strength (if enabled)
+            if self.config["lot_sizing"]["signal_strength_multiplier"]:
+                signal_multiplier = max(0.5, min(2.0, signal.strength))
+                lot_multiplier *= signal_multiplier
+            
+            # Factor 2: Equity-based sizing (if enabled)
+            if self.config["lot_sizing"]["equity_based_sizing"]:
+                equity_multiplier = self._calculate_equity_multiplier()
+                lot_multiplier *= equity_multiplier
+            
+            # Factor 3: Risk management
+            risk_multiplier = self._calculate_risk_multiplier(decision_context)
+            lot_multiplier *= risk_multiplier
+            
+            # Factor 4: Portfolio balance consideration
+            balance_multiplier = self._calculate_balance_multiplier(signal.direction)
+            lot_multiplier *= balance_multiplier
+            
+            # Calculate final lot size
+            final_lot = base_lot * lot_multiplier
+            
+            # Apply limits and validation
+            final_lot = max(0.01, min(max_lot, final_lot))
+            final_lot = self._validate_lot_size(final_lot)
+            
+            # Log calculation details
+            self.log(f"Unified lot calculation: base={base_lot}, multiplier={lot_multiplier:.2f}, final={final_lot:.2f}")
+            
+            return final_lot
+            
+        except Exception as e:
+            self.log(f"Error in unified lot size calculation: {str(e)}", "ERROR")
+            return self.config["trading_parameters"]["base_lot_size"]
+
+    def get_cached_zone_analysis(self) -> dict:
+        """
+        🚀 Zone analysis with intelligent caching
+        Cache TTL: 30 seconds, invalidate on position changes
+        """
+        try:
+            current_time = datetime.now()
+            
+            # Check if cache is valid
+            if (self.zone_analysis_cache and 
+                self.zone_analysis_cache_time and
+                (current_time - self.zone_analysis_cache_time).seconds < self.zone_cache_ttl):
+                
+                # Check if positions changed significantly
+                current_positions_hash = self._calculate_positions_hash()
+                if (self.zone_analysis_cache_positions_hash and
+                    abs(current_positions_hash - self.zone_analysis_cache_positions_hash) < self.zone_recalc_threshold):
+                    
+                    # Cache hit
+                    return self.zone_analysis_cache
+            
+            # Cache miss - recalculate
+            zone_analysis = self._calculate_zone_analysis()
+            
+            # Update cache
+            self.zone_analysis_cache = zone_analysis
+            self.zone_analysis_cache_time = current_time
+            self.zone_analysis_cache_positions_hash = self._calculate_positions_hash()
+            
+            return zone_analysis
+            
+        except Exception as e:
+            self.log(f"Error in cached zone analysis: {str(e)}", "ERROR")
+            return {'zone_distribution': {}, 'congestion_score': 0, 'recommendation': 'NEUTRAL'}
+
+    def _calculate_zone_analysis(self) -> dict:
+        """Calculate comprehensive zone analysis"""
+        try:
+            analysis = {
+                'zone_distribution': {},
+                'congestion_score': 0,
+                'recommendation': 'NEUTRAL',
+                'optimal_zones': [],
+                'avoided_zones': []
+            }
+            
+            if not self.positions:
+                return analysis
+            
+            # Get current price
+            current_tick = mt5.symbol_info_tick(self.symbol) if self.mt5_connected else None
+            if not current_tick:
+                return analysis
+            
+            current_price = (current_tick.bid + current_tick.ask) / 2
+            
+            # Group positions by zones
+            zones = {}
+            for pos in self.positions:
+                zone_id = int(pos.open_price / (self.zone_size_pips / 100))  # Convert pips to price
+                if zone_id not in zones:
+                    zones[zone_id] = {'positions': [], 'total_volume': 0, 'avg_profit': 0}
+                
+                zones[zone_id]['positions'].append(pos)
+                zones[zone_id]['total_volume'] += pos.volume
+            
+            # Calculate zone metrics
+            for zone_id, zone_data in zones.items():
+                position_count = len(zone_data['positions'])
+                total_profit = sum(pos.profit for pos in zone_data['positions'])
+                zone_data['avg_profit'] = total_profit / position_count if position_count > 0 else 0
+                zone_data['congestion'] = position_count / self.max_positions_per_zone
+            
+            analysis['zone_distribution'] = zones
+            
+            # Calculate overall congestion score
+            total_congestion = sum(zone['congestion'] for zone in zones.values())
+            analysis['congestion_score'] = total_congestion / len(zones) if zones else 0
+            
+            # Generate recommendation
+            if analysis['congestion_score'] > 0.8:
+                analysis['recommendation'] = 'AVOID_CROWDED_ZONES'
+            elif analysis['congestion_score'] < 0.3:
+                analysis['recommendation'] = 'DIVERSIFY_ZONES'
+            else:
+                analysis['recommendation'] = 'BALANCED'
+            
+            return analysis
+            
+        except Exception as e:
+            self.log(f"Error calculating zone analysis: {str(e)}", "ERROR")
+            return {'zone_distribution': {}, 'congestion_score': 0, 'recommendation': 'NEUTRAL'}
+
+    # Helper methods for decision engine
+    def _calculate_safety_score(self, safety_factors: dict) -> float:
+        """Calculate safety score from safety factors"""
+        try:
+            score = 0.0
+            
+            # Portfolio health (40% of safety score)
+            health = safety_factors.get('portfolio_health', 50)
+            score += (health / 100) * 0.4
+            
+            # Margin level (30% of safety score)
+            margin = safety_factors.get('margin_level', 200)
+            margin_score = min(1.0, margin / 300) if margin > 0 else 0
+            score += margin_score * 0.3
+            
+            # Position limit (20% of safety score)
+            if safety_factors.get('max_positions_check', False):
+                score += 0.2
+            
+            # Circuit breaker (10% of safety score)
+            if safety_factors.get('circuit_breaker_status', True):
+                score += 0.1
+            
+            return min(1.0, score)
+            
+        except Exception as e:
+            self.log(f"Error calculating safety score: {str(e)}", "ERROR")
+            return 0.0
+
+    def _calculate_portfolio_score(self, portfolio_factors: dict) -> float:
+        """Calculate portfolio score from portfolio factors"""
+        try:
+            score = 0.0
+            
+            # Balance ratio (50% of portfolio score)
+            balance_ratio = portfolio_factors.get('balance_ratio', 0.5)
+            balance_score = 1.0 - abs(balance_ratio - 0.5) * 2  # Penalty for imbalance
+            score += max(0, balance_score) * 0.5
+            
+            # Exposure level (30% of portfolio score)
+            exposure = portfolio_factors.get('total_exposure', 0)
+            exposure_score = max(0, 1.0 - exposure / 300)  # Penalty for high exposure
+            score += exposure_score * 0.3
+            
+            # Recent performance (20% of portfolio score)
+            performance = portfolio_factors.get('recent_performance', 0.5)
+            score += performance * 0.2
+            
+            return min(1.0, score)
+            
+        except Exception as e:
+            self.log(f"Error calculating portfolio score: {str(e)}", "ERROR")
+            return 0.5
+
+    def _calculate_zone_score(self, zone_factors: dict) -> float:
+        """Calculate zone score from zone factors"""
+        try:
+            congestion = zone_factors.get('congestion_score', 0)
+            recommendation = zone_factors.get('zone_recommendation', 'NEUTRAL')
+            
+            # Base score inversely related to congestion
+            score = max(0, 1.0 - congestion)
+            
+            # Adjust based on recommendation
+            if recommendation == 'AVOID_CROWDED_ZONES':
+                score *= 0.5
+            elif recommendation == 'DIVERSIFY_ZONES':
+                score *= 1.2
+            
+            return min(1.0, score)
+            
+        except Exception as e:
+            self.log(f"Error calculating zone score: {str(e)}", "ERROR")
+            return 0.5
+
+    def _calculate_balance_score(self, balance_factors: dict) -> float:
+        """Calculate balance score from balance factors"""
+        try:
+            needs_rebalancing = balance_factors.get('needs_rebalancing', False)
+            deviation = balance_factors.get('balance_deviation', 0)
+            
+            # Score inversely related to deviation
+            score = max(0, 1.0 - abs(deviation))
+            
+            # Penalty if rebalancing is needed
+            if needs_rebalancing:
+                score *= 0.7
+            
+            return score
+            
+        except Exception as e:
+            self.log(f"Error calculating balance score: {str(e)}", "ERROR")
+            return 0.5
+
+    def _calculate_signal_score(self, signal_factors: dict) -> float:
+        """Calculate signal score from signal factors"""
+        try:
+            strength = signal_factors.get('strength', 1.0)
+            timing = signal_factors.get('timing', 0.5)
+            market_conditions = signal_factors.get('market_conditions', 0.5)
+            
+            # Normalize strength (assuming range 0.5-3.0)
+            strength_score = (strength - 0.5) / 2.5
+            
+            # Weighted combination
+            score = (strength_score * 0.5 + timing * 0.3 + market_conditions * 0.2)
+            
+            return min(1.0, max(0, score))
+            
+        except Exception as e:
+            self.log(f"Error calculating signal score: {str(e)}", "ERROR")
+            return 0.5
+
+    # Additional helper methods
+    def _get_current_margin_level(self) -> float:
+        """Get current margin level"""
+        try:
+            if self.mt5_connected:
+                account_info = mt5.account_info()
+                if account_info and account_info.margin > 0:
+                    return (account_info.equity / account_info.margin) * 100
+            return 300.0  # Default safe value
+        except:
+            return 300.0
+
+    def _calculate_balance_ratio(self) -> float:
+        """Calculate current balance ratio"""
+        total_volume = self.buy_volume + self.sell_volume
+        if total_volume > 0:
+            return self.buy_volume / total_volume
+        return 0.5
+
+    def _calculate_total_exposure(self) -> float:
+        """Calculate total portfolio exposure in pips"""
+        try:
+            if not self.positions:
+                return 0.0
+            
+            current_tick = mt5.symbol_info_tick(self.symbol) if self.mt5_connected else None
+            if not current_tick:
+                return 0.0
+            
+            current_price = (current_tick.bid + current_tick.ask) / 2
+            total_exposure = 0.0
+            
+            for pos in self.positions:
+                if pos.type == "BUY":
+                    exposure = abs(current_price - pos.open_price) * 100  # Convert to pips
+                else:
+                    exposure = abs(pos.open_price - current_price) * 100
+                total_exposure += exposure
+            
+            return total_exposure
+        except:
+            return 0.0
+
+    def _get_recent_performance(self) -> float:
+        """Get recent performance score (0.0-1.0)"""
+        try:
+            if self.total_signals > 0:
+                return self.successful_signals / self.total_signals
+            return 0.5
+        except:
+            return 0.5
+
+    def _calculate_balance_deviation(self) -> float:
+        """Calculate deviation from ideal balance (0.5)"""
+        balance_ratio = self._calculate_balance_ratio()
+        return abs(balance_ratio - 0.5)
+
+    def _needs_rebalancing(self) -> bool:
+        """Check if portfolio needs rebalancing"""
+        return self._calculate_balance_deviation() > 0.2
+
+    def _evaluate_signal_timing(self, signal: Signal) -> float:
+        """Evaluate signal timing quality"""
+        try:
+            if self.last_signal_time:
+                time_since_last = (signal.timestamp - self.last_signal_time).seconds
+                if time_since_last < self.signal_cooldown:
+                    return 0.3  # Too soon
+                elif time_since_last > 300:  # 5 minutes
+                    return 1.0  # Good timing
+                else:
+                    return 0.7  # Acceptable timing
+            return 1.0  # First signal
+        except:
+            return 0.5
+
+    def _evaluate_market_conditions(self) -> float:
+        """Evaluate current market conditions"""
+        try:
+            # Use volatility as proxy for market conditions
+            volatility = getattr(self, 'recent_volatility', 1.0)
+            if 0.5 <= volatility <= 2.0:
+                return 1.0  # Good conditions
+            elif volatility < 0.5:
+                return 0.6  # Low volatility
+            else:
+                return 0.4  # High volatility
+        except:
+            return 0.5
+
+    def _calculate_equity_multiplier(self) -> float:
+        """Calculate equity-based multiplier"""
+        try:
+            if self.mt5_connected:
+                account_info = mt5.account_info()
+                if account_info:
+                    equity = account_info.equity
+                    if equity < 1000:
+                        return 0.5
+                    elif equity < 5000:
+                        return 0.8
+                    elif equity < 10000:
+                        return 1.0
+                    else:
+                        return min(2.0, equity / 10000)
+            return 1.0
+        except:
+            return 1.0
+
+    def _calculate_risk_multiplier(self, decision_context: dict) -> float:
+        """Calculate risk-based multiplier"""
+        try:
+            factors = decision_context.get('factors', {})
+            safety_factors = factors.get('safety', {})
+            
+            # Reduce lot size based on risk factors
+            risk_multiplier = 1.0
+            
+            # Portfolio health impact
+            health = safety_factors.get('portfolio_health', 100)
+            if health < 50:
+                risk_multiplier *= 0.5
+            elif health < 70:
+                risk_multiplier *= 0.8
+            
+            # Position count impact
+            pos_count = len(self.positions)
+            if pos_count > 40:
+                risk_multiplier *= 0.6
+            elif pos_count > 30:
+                risk_multiplier *= 0.8
+            
+            return max(0.3, risk_multiplier)
+        except:
+            return 1.0
+
+    def _calculate_balance_multiplier(self, direction: str) -> float:
+        """Calculate balance-based multiplier"""
+        try:
+            balance_ratio = self._calculate_balance_ratio()
+            
+            if direction == "BUY":
+                if balance_ratio > 0.7:  # Too many buys
+                    return 0.5
+                elif balance_ratio < 0.3:  # Need more buys
+                    return 1.3
+            else:  # SELL
+                if balance_ratio < 0.3:  # Too many sells
+                    return 0.5
+                elif balance_ratio > 0.7:  # Need more sells
+                    return 1.3
+            
+            return 1.0
+        except:
+            return 1.0
+
+    def _validate_lot_size(self, lot_size: float) -> float:
+        """Validate and adjust lot size according to broker requirements"""
+        try:
+            # Use the existing validation logic
+            return InputValidator.validate_volume(lot_size)
+        except:
+            return max(0.01, min(0.1, lot_size))
+
+    def _calculate_positions_hash(self) -> float:
+        """Calculate hash for position changes detection"""
+        try:
+            if not self.positions:
+                return 0.0
+            
+            # Simple hash based on position count and total volume
+            total_volume = sum(pos.volume for pos in self.positions)
+            return len(self.positions) * 100 + total_volume
+        except:
+            return 0.0
+
+    def _generate_decision_reasoning(self, decision: dict, factors: dict) -> str:
+        """Generate human-readable reasoning for the decision"""
+        try:
+            action = decision.get('action', 'skip')
+            confidence = decision.get('confidence', 0.0)
+            priority_factor = decision.get('priority_factor', 'unknown')
+            
+            reasoning = f"Decision: {action.upper()} (confidence: {confidence:.1%})\n"
+            reasoning += f"Primary factor: {priority_factor}\n"
+            
+            # Add specific factor details
+            if 'safety' in factors:
+                health = factors['safety'].get('portfolio_health', 0)
+                reasoning += f"Portfolio health: {health:.1f}%\n"
+            
+            if 'balance' in factors:
+                buy_vol = factors['balance'].get('buy_volume', 0)
+                sell_vol = factors['balance'].get('sell_volume', 0)
+                reasoning += f"Volume balance: {buy_vol:.2f}/{sell_vol:.2f}\n"
+            
+            return reasoning
+        except:
+            return f"Decision: {decision.get('action', 'skip')} - reasoning unavailable"
+
+    def _track_decision_performance(self, execution_time_ms: float):
+        """Track decision engine performance"""
+        try:
+            if not hasattr(self, 'decision_performance'):
+                self.decision_performance = {
+                    'execution_times': [],
+                    'avg_time': 0.0,
+                    'max_time': 0.0
+                }
+            
+            perf = self.decision_performance
+            perf['execution_times'].append(execution_time_ms)
+            
+            # Keep only last 100 measurements
+            if len(perf['execution_times']) > 100:
+                perf['execution_times'] = perf['execution_times'][-100:]
+            
+            perf['avg_time'] = sum(perf['execution_times']) / len(perf['execution_times'])
+            perf['max_time'] = max(perf['execution_times'])
+            
+            # Log performance warning if too slow
+            if execution_time_ms > self.config["performance"]["max_execution_time_ms"]:
+                self.log(f"⚠️ Slow decision engine: {execution_time_ms:.1f}ms", "WARNING")
+                
+        except Exception as e:
+            self.log(f"Error tracking decision performance: {str(e)}", "ERROR")
+
     def smart_signal_router(self, signal: Signal) -> Dict[str, Any]:
         """
-        Enhanced Smart Signal Router with Zone-Based Analysis
-        ตัดสินใจว่าจะ execute, redirect หรือ skip signal โดยพิจารณา zone distribution
+        🎯 Enhanced Smart Signal Router v2.0 - Now uses Unified Decision Engine
+        Maintains backward compatibility while using new conflict-free decision system
         Returns: {'action': 'execute'/'redirect'/'skip', 'details': {...}}
         """
+        try:
+            # 🧠 Use the new unified decision engine for conflict-free decisions
+            unified_decision = self.unified_decision_engine(signal)
+            
+            # Convert unified decision to legacy format for backward compatibility
+            result = {
+                'action': unified_decision['action'],
+                'details': {
+                    'original_signal': signal,
+                    'reason': unified_decision['reasoning'],
+                    'confidence': unified_decision['confidence'],
+                    'lot_size': unified_decision['lot_size'],
+                    'redirect_target': unified_decision.get('target_position'),
+                    'profit_captured': 0.0,
+                    'zone_analysis': unified_decision['factors'].get('zone', {}),
+                    'execution_time_ms': unified_decision.get('execution_time_ms', 0),
+                    'decision_factors': unified_decision['factors']
+                }
+            }
+            
+            # Legacy router fallback for special cases (if unified engine returns skip)
+            if unified_decision['action'] == 'skip' and self.smart_router_enabled and self.positions:
+                # Run legacy zone analysis for additional insights
+                legacy_zone_analysis = self.analyze_position_zones()
+                result['details']['legacy_zone_analysis'] = legacy_zone_analysis
+                
+                # Check if legacy system would have made a different decision
+                legacy_result = self._legacy_router_check(signal, legacy_zone_analysis)
+                if legacy_result['action'] != 'skip':
+                    result['details']['reason'] += f" (Legacy override: {legacy_result['reason']})"
+                    result['action'] = legacy_result['action']
+            
+            # Update router statistics
+            self._update_router_statistics(result, unified_decision)
+            
+            # Log decision for monitoring
+            self.log(f"🎯 Unified Router Decision: {result['action'].upper()} "
+                    f"(confidence: {unified_decision['confidence']:.1%}, "
+                    f"time: {unified_decision.get('execution_time_ms', 0):.1f}ms)")
+            
+            return result
+            
+        except Exception as e:
+            self.log(f"Error in enhanced smart signal router v2.0: {str(e)}", "ERROR")
+            # Fallback to original router logic on error
+            return self._legacy_smart_signal_router(signal)
+
+    def _legacy_smart_signal_router(self, signal: Signal) -> Dict[str, Any]:
+        """Legacy smart router for fallback when unified engine fails"""
         try:
             result = {
                 'action': 'execute',
                 'details': {
                     'original_signal': signal,
-                    'reason': 'Normal execution',
+                    'reason': 'Legacy fallback execution',
                     'redirect_target': None,
                     'profit_captured': 0.0,
                     'zone_analysis': None
@@ -2581,80 +3664,127 @@ class TradingSystem:
             if not self.smart_router_enabled or not self.positions:
                 return result
             
-            # 🎯 PHASE 1: Zone-Based Analysis
+            # Simplified legacy logic - zone analysis
             zone_analysis = self.analyze_position_zones()
             result['details']['zone_analysis'] = zone_analysis
             
-            # Check position clustering first
+            # Check position clustering
             if self.force_zone_diversification and hasattr(signal, 'price') and signal.price:
                 if self.check_position_clustering(signal.price):
-                    # Try to find alternative zone for signal
                     alternative_zone = self.find_best_zone_for_signal(signal, zone_analysis)
                     if alternative_zone['should_redirect']:
                         result['action'] = 'redirect'
                         result['details'].update(alternative_zone)
-                        result['details']['reason'] = f"Zone diversification: {alternative_zone['reason']}"
+                        result['details']['reason'] = f"Legacy zone diversification: {alternative_zone['reason']}"
                         return result
                     else:
                         result['action'] = 'skip'
-                        result['details']['reason'] = 'Position clustering prevention - no suitable alternative'
-                        self.log(f"🚫 Signal SKIPPED: {signal.direction} - Position clustering prevented")
+                        result['details']['reason'] = 'Legacy position clustering prevention'
                         return result
             
-            # 1. Check redirect cooldown
+            # Check redirect cooldown
             if (self.last_redirect_time and 
                 (datetime.now() - self.last_redirect_time).seconds < self.redirect_cooldown):
                 return result
             
-            # 2. Check redirect ratio limit
+            # Check redirect ratio limit
             if self.total_signals > 0:
                 current_redirect_ratio = self.total_redirects / self.total_signals
                 if current_redirect_ratio >= self.max_redirect_ratio:
-                    result['details']['reason'] = 'Redirect ratio limit reached'
+                    result['details']['reason'] = 'Legacy redirect ratio limit reached'
                     return result
             
-            # 3. Analyze current balance
+            # Analyze current balance
             total_volume = self.buy_volume + self.sell_volume
             if total_volume <= 0:
                 return result
             
             buy_ratio = self.buy_volume / total_volume
             
-            # 🎯 PHASE 2: Zone-Based Redirect Analysis
+            # Zone-based redirect analysis
             zone_redirect_analysis = self.should_redirect_for_zone_balance(signal, zone_analysis, buy_ratio)
             
             if zone_redirect_analysis['should_redirect']:
                 result['action'] = 'redirect'
                 result['details'].update(zone_redirect_analysis)
-                self.log(f"🔄 Zone-Based REDIRECT: {signal.direction} → {zone_redirect_analysis['reason']}")
                 return result
             
-            # 4. Check traditional volume-based redirect
+            # Traditional volume-based redirect
             redirect_analysis = self.analyze_redirect_opportunity(signal, buy_ratio)
             
             if redirect_analysis['should_redirect']:
                 result['action'] = 'redirect'
                 result['details'].update(redirect_analysis)
-                self.log(f"🔄 Volume-Based REDIRECT: {signal.direction} → Close {redirect_analysis['target_type']}")
-                self.log(f"   Reason: {redirect_analysis['reason']}")
                 return result
             
-            # 5. Check if should skip (extreme cases)
+            # Check if should skip
             if self.should_skip_signal(signal, buy_ratio):
                 result['action'] = 'skip'
-                result['details']['reason'] = 'Signal skipped for portfolio protection'
+                result['details']['reason'] = 'Legacy signal skipped for portfolio protection'
                 return result
-            
-            # 6. Final zone distribution check (relaxed threshold)
-            if zone_analysis['distribution_score'] < 20:  # Only skip if very poor distribution (was 30)
-                self.log(f"⚠️ Very poor zone distribution (score: {zone_analysis['distribution_score']:.1f}) - allowing signal")
-                result['details']['reason'] += ' - Poor zone distribution warning'
             
             return result
             
         except Exception as e:
-            self.log(f"Error in enhanced smart signal router: {str(e)}", "ERROR")
-            return {'action': 'execute', 'details': {'reason': 'Router error - default execute'}}
+            self.log(f"Error in legacy smart signal router: {str(e)}", "ERROR")
+            return {'action': 'execute', 'details': {'reason': 'Legacy router error - default execute'}}
+
+    def _legacy_router_check(self, signal: Signal, zone_analysis: dict) -> dict:
+        """Quick legacy router check for comparison"""
+        try:
+            # Simplified legacy check
+            total_volume = self.buy_volume + self.sell_volume
+            if total_volume <= 0:
+                return {'action': 'execute', 'reason': 'No volume for legacy check'}
+            
+            buy_ratio = self.buy_volume / total_volume
+            
+            # Check extreme imbalance
+            if signal.direction == "BUY" and buy_ratio > 0.8:
+                return {'action': 'redirect', 'reason': 'Legacy extreme buy imbalance'}
+            elif signal.direction == "SELL" and buy_ratio < 0.2:
+                return {'action': 'redirect', 'reason': 'Legacy extreme sell imbalance'}
+            
+            return {'action': 'execute', 'reason': 'Legacy check passed'}
+            
+        except Exception as e:
+            return {'action': 'skip', 'reason': f'Legacy check error: {str(e)}'}
+
+    def _update_router_statistics(self, result: dict, unified_decision: dict):
+        """Update router statistics for monitoring"""
+        try:
+            if not hasattr(self, 'router_v2_stats'):
+                self.router_v2_stats = {
+                    'total_decisions': 0,
+                    'execute_count': 0,
+                    'redirect_count': 0,
+                    'skip_count': 0,
+                    'avg_confidence': 0.0,
+                    'avg_execution_time': 0.0
+                }
+            
+            stats = self.router_v2_stats
+            stats['total_decisions'] += 1
+            
+            action = result['action']
+            if action == 'execute':
+                stats['execute_count'] += 1
+            elif action == 'redirect':
+                stats['redirect_count'] += 1
+            else:
+                stats['skip_count'] += 1
+            
+            # Update averages
+            confidence = unified_decision.get('confidence', 0.0)
+            execution_time = unified_decision.get('execution_time_ms', 0.0)
+            
+            # Rolling average calculation
+            n = stats['total_decisions']
+            stats['avg_confidence'] = ((stats['avg_confidence'] * (n-1)) + confidence) / n
+            stats['avg_execution_time'] = ((stats['avg_execution_time'] * (n-1)) + execution_time) / n
+            
+        except Exception as e:
+            self.log(f"Error updating router statistics: {str(e)}", "ERROR")
 
     def should_redirect_for_zone_balance(self, signal: Signal, zone_analysis: dict, buy_ratio: float) -> dict:
         """ตรวจสอบว่าควร redirect เพื่อ zone balance หรือไม่"""
