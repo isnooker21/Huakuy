@@ -3814,6 +3814,26 @@ class TradingSystem:
             config = self.config["order_execution"]["price_validation"]
             return config["static_staleness_threshold"], config["static_deviation_threshold"]
 
+    def get_adaptive_threshold(self) -> float:
+        """🎯 Simple dynamic threshold based on GMT+7 time zones."""
+        try:
+            hour = datetime.now().hour
+
+            # Simple time-based threshold (GMT+7)
+            if 1 <= hour <= 8:      # Asian quiet hours
+                return 1.0
+            elif 9 <= hour <= 14:   # Asian/European active hours
+                return 1.5
+            elif 15 <= hour <= 20:  # European peak trading
+                return 2.0
+            elif 21 <= hour <= 23:  # London/NY overlap hours
+                return 3.0
+            else:                   # Other times
+                return 1.2
+
+        except:
+            return 1.0  # Safe fallback
+
     def _validate_order_prerequisites(self, signal: Signal, lot_size: float) -> bool:
         """Enhanced pre-order validation with protection systems"""
         try:
@@ -3846,8 +3866,9 @@ class TradingSystem:
                 if hasattr(signal, 'confidence') and signal.confidence < confidence_threshold:
                     self.log(f"❌ Order prerequisite failed: Signal confidence {signal.confidence:.2f} below threshold {confidence_threshold:.2f}", "WARNING")
                     return False
-                elif hasattr(signal, 'strength') and signal.strength < confidence_threshold * 5:  # Scale strength to confidence
-                    self.log(f"❌ Order prerequisite failed: Signal strength {signal.strength:.2f} below threshold {confidence_threshold * 5:.2f}", "WARNING")
+                elif hasattr(signal, 'strength') and signal.strength < self.get_adaptive_threshold():
+                    adaptive_threshold = self.get_adaptive_threshold()
+                    self.log(f"❌ Order prerequisite failed: Signal strength {signal.strength:.2f} below threshold {adaptive_threshold:.2f}", "WARNING")
                     return False
             
             # Market hours check (if enabled)
@@ -3897,9 +3918,22 @@ class TradingSystem:
             
             # Symbol validation (enhanced)
             if MT5_AVAILABLE:
-                symbol_info = mt5.symbol_info(self.current_symbol)
+                # Retry mechanism for symbol availability
+                symbol_info = None
+                for attempt in range(3):
+                    symbol_info = mt5.symbol_info(self.current_symbol)
+                    if symbol_info:
+                        break
+                    time.sleep(0.1)
+
                 if not symbol_info:
-                    self.log(f"❌ Order prerequisite failed: Symbol {self.current_symbol} not available", "WARNING")
+                    self.log(f"❌ Order prerequisite failed: Symbol {self.current_symbol} not available after retries", "WARNING")
+                    return False
+
+                # Test for tick data availability
+                tick = mt5.symbol_info_tick(self.current_symbol)
+                if not tick:
+                    self.log(f"❌ Order prerequisite failed: No tick data for {self.current_symbol}", "WARNING")
                     return False
                     
                 if not symbol_info.visible:
@@ -9256,18 +9290,22 @@ class TradingSystem:
             self.log(f"       Market hours check: {'🟢' if validation.get('market_hours_check') else '🔴'}", "INFO")
 
     def reset_protection_systems(self):
-        """Reset all protection systems to initial state"""
+        """Reset all protection systems to an initial state."""
         self.log("🔄 Resetting protection systems...", "INFO")
-        
+
         if self.rate_limiter:
             self.rate_limiter.order_timestamps = []
             self.rate_limiter.last_order_time = None
             self.log("   📊 Rate limiter reset", "INFO")
-            
+
         if self.circuit_breaker:
             self.circuit_breaker.reset()
             self.log("   🔧 Circuit breaker reset", "INFO")
-            
+
+        # Reset connection failure counters
+        self.connection_failures = 0
+        self.circuit_breaker_open = False
+
         self.log("✅ Protection systems reset complete", "INFO")
 
     def test_order_execution(self) -> bool:
