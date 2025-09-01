@@ -32,6 +32,8 @@ positions_backup*.pkl
 
 # Test files and temporary data
 test_gui_fixes.py
+test_symbol_detection.py
+test_core_functionality.py
 /tmp/
 
 # IDE files
