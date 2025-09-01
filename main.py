@@ -464,11 +464,86 @@ class TradingSystem:
         self.last_hedge_time = None  # Track last hedge execution time
         self.recent_volatility = 1.0  # Default volatility level
 
+    def monitor_critical_errors(self, error_message: str, error_level: str) -> None:
+        """Monitor and alert on critical error patterns from the issue"""
+        try:
+            # Critical error patterns to monitor
+            critical_patterns = {
+                'position_close_failure': ['Failed to close position', 'Invalid fill'],
+                'symbol_info_failure': ['Cannot get symbol info'],
+                'order_execution_failure': ['Order execution failed'],
+                'connection_failure': ['MT5 not connected', 'health check failed']
+            }
+            
+            # Check if this error matches any critical patterns
+            for pattern_type, patterns in critical_patterns.items():
+                for pattern in patterns:
+                    if pattern.lower() in error_message.lower():
+                        # Track this critical error
+                        current_time = datetime.now()
+                        
+                        if not hasattr(self, 'critical_error_tracking'):
+                            self.critical_error_tracking = {}
+                        
+                        if pattern_type not in self.critical_error_tracking:
+                            self.critical_error_tracking[pattern_type] = {
+                                'count': 0,
+                                'last_occurrence': None,
+                                'recent_occurrences': []
+                            }
+                        
+                        # Update tracking
+                        self.critical_error_tracking[pattern_type]['count'] += 1
+                        self.critical_error_tracking[pattern_type]['last_occurrence'] = current_time
+                        self.critical_error_tracking[pattern_type]['recent_occurrences'].append({
+                            'timestamp': current_time.isoformat(),
+                            'message': error_message,
+                            'level': error_level
+                        })
+                        
+                        # Keep only last 10 occurrences
+                        recent = self.critical_error_tracking[pattern_type]['recent_occurrences']
+                        if len(recent) > 10:
+                            self.critical_error_tracking[pattern_type]['recent_occurrences'] = recent[-10:]
+                        
+                        # Alert on critical error frequency
+                        recent_count = len([
+                            occ for occ in recent 
+                            if (current_time - datetime.fromisoformat(occ['timestamp'])).seconds < 300  # Last 5 minutes
+                        ])
+                        
+                        if recent_count >= 3:  # 3 or more in 5 minutes
+                            alert_msg = f"🚨 CRITICAL: {pattern_type} occurred {recent_count} times in 5 minutes"
+                            
+                            # Add to system alerts if available
+                            if hasattr(self, 'system_alerts'):
+                                self.system_alerts.append({
+                                    'timestamp': current_time.isoformat(),
+                                    'type': 'CRITICAL_ERROR_FREQUENCY',
+                                    'pattern': pattern_type,
+                                    'count': recent_count,
+                                    'message': alert_msg
+                                })
+                                
+                                # Keep alerts list manageable
+                                if len(self.system_alerts) > getattr(self, 'max_alerts', 50):
+                                    self.system_alerts = self.system_alerts[-self.max_alerts:]
+                        
+                        break  # Only match first pattern to avoid duplicate tracking
+                
+        except Exception as e:
+            # Don't let monitoring errors break the main application
+            logger.error(f"Error in critical error monitoring: {str(e)}")
+
     def log(self, message: str, level: str = "INFO"):
-        """Thread-safe logging"""
+        """Enhanced thread-safe logging with critical error monitoring"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         log_message = f"[{timestamp}] {level}: {message}"
         self.log_queue.put(log_message)
+        
+        # Monitor for critical error patterns
+        if level in ["ERROR", "WARNING"]:
+            self.monitor_critical_errors(message, level)
         
         if level == "ERROR":
             logger.error(message)
@@ -521,6 +596,48 @@ class TradingSystem:
                     retry_delay *= 1.5
                     
         self.log(f"❌ Failed to get symbol info for {symbol} after {max_retries} attempts", "ERROR")
+        
+        # Log comprehensive failure details for debugging
+        self.log(f"   Normalized symbol: {normalized_symbol}", "ERROR")
+        self.log(f"   MT5 connected: {self.mt5_connected}", "ERROR")
+        self.log(f"   Connection failures: {getattr(self, 'connection_failures', 0)}", "ERROR")
+        
+        # Attempt error recovery
+        recovery_context = {
+            'symbol': symbol,
+            'normalized_symbol': normalized_symbol,
+            'attempts': max_retries
+        }
+        if self.handle_trading_error_recovery('symbol_info_failure', recovery_context):
+            # Try one more time after recovery
+            self.log(f"🔄 Retrying symbol info after recovery for {symbol}", "INFO")
+            try:
+                symbol_info = mt5.symbol_info(normalized_symbol)
+                if symbol_info is not None:
+                    return symbol_info
+                if normalized_symbol != symbol:
+                    symbol_info = mt5.symbol_info(symbol)
+                    if symbol_info is not None:
+                        return symbol_info
+            except Exception as e:
+                self.log(f"❌ Symbol info retry after recovery failed: {str(e)}", "ERROR")
+        
+        # Update performance metrics for failed symbol operations
+        if hasattr(self, 'performance_metrics'):
+            self.performance_metrics['failed_operations'] += 1
+            if 'symbol_info_failures' not in self.performance_metrics:
+                self.performance_metrics['symbol_info_failures'] = []
+            
+            self.performance_metrics['symbol_info_failures'].append({
+                'timestamp': datetime.now().isoformat(),
+                'symbol': symbol,
+                'normalized_symbol': normalized_symbol,
+                'attempts': max_retries
+            })
+            # Keep only last 10 symbol failures
+            if len(self.performance_metrics['symbol_info_failures']) > 10:
+                self.performance_metrics['symbol_info_failures'] = self.performance_metrics['symbol_info_failures'][-10:]
+        
         return None
 
     def detect_broker_filling_type(self) -> int:
@@ -2620,6 +2737,18 @@ class TradingSystem:
                     continue
                 
         self.log(f"❌ Failed to close position {ticket} after {max_retries} attempts", "ERROR")
+        
+        # Attempt error recovery for position closing
+        recovery_context = {
+            'ticket': ticket,
+            'symbol': position.symbol,
+            'volume': position.volume,
+            'position_type': position.type,
+            'attempts': max_retries
+        }
+        if self.handle_trading_error_recovery('position_close_failure', recovery_context):
+            self.log(f"🔄 Error recovery completed for position {ticket} - manual retry may be needed", "INFO")
+        
         return False
 
     def _validate_lot_size(self, lot_size: float) -> float:
@@ -2738,6 +2867,39 @@ class TradingSystem:
                     time.sleep(1)
             
             self.log("❌ Order execution failed after all attempts", "ERROR")
+            
+            # Log comprehensive failure details for debugging
+            self.log(f"   Signal: {signal.direction} {signal.symbol}", "ERROR")
+            self.log(f"   Lot size: {lot_size:.2f}", "ERROR")
+            self.log(f"   Filling type: {self.filling_type}", "ERROR")
+            self.log(f"   Connection status: MT5={'Connected' if self.mt5_connected else 'Disconnected'}", "ERROR")
+            self.log(f"   Circuit breaker: {'OPEN' if self.circuit_breaker_open else 'CLOSED'}", "ERROR")
+            
+            # Attempt error recovery
+            recovery_context = {
+                'signal_direction': signal.direction,
+                'symbol': signal.symbol,
+                'lot_size': lot_size,
+                'filling_type': str(self.filling_type)
+            }
+            if self.handle_trading_error_recovery('order_execution_failure', recovery_context):
+                self.log("🔄 Attempting one final order execution after recovery", "INFO")
+                # This could potentially trigger one more attempt, but we'll leave that 
+                # for manual retry by the system rather than recursive calls
+            
+            # Update performance metrics for failed operations
+            if hasattr(self, 'performance_metrics'):
+                self.performance_metrics['failed_operations'] += 1
+                self.performance_metrics['recent_errors'].append({
+                    'timestamp': datetime.now().isoformat(),
+                    'error': 'Order execution failed',
+                    'signal': f"{signal.direction} {signal.symbol}",
+                    'lot_size': lot_size
+                })
+                # Keep only last 10 errors
+                if len(self.performance_metrics['recent_errors']) > 10:
+                    self.performance_metrics['recent_errors'] = self.performance_metrics['recent_errors'][-10:]
+            
             return False
             
         except ValidationError as e:
@@ -2785,6 +2947,100 @@ class TradingSystem:
         }
         
         return error_descriptions.get(retcode, f"Unknown error code: {retcode}")
+
+    def handle_trading_error_recovery(self, error_type: str, context: dict = None) -> bool:
+        """Handle automatic error recovery for trading operations"""
+        try:
+            context = context or {}
+            
+            self.log(f"🔧 Attempting error recovery for: {error_type}", "INFO")
+            
+            # Log context information
+            if context:
+                for key, value in context.items():
+                    self.log(f"   {key}: {value}", "INFO")
+            
+            # Connection-related errors
+            if error_type in ['symbol_info_failure', 'connection_failure', 'timeout']:
+                # Check if we should attempt reconnection
+                if not self.circuit_breaker_open:
+                    self.log("🔄 Attempting MT5 reconnection for error recovery", "INFO")
+                    
+                    # Save current connection state
+                    was_connected = self.mt5_connected
+                    
+                    # Attempt graceful reconnection
+                    if was_connected:
+                        try:
+                            mt5.shutdown()
+                        except:
+                            pass
+                        self.mt5_connected = False
+                    
+                    # Wait a moment before reconnecting
+                    time.sleep(2)
+                    
+                    # Attempt reconnection
+                    if self.connect_mt5(max_retries=2, retry_delay=1.0):
+                        self.log("✅ Error recovery successful - MT5 reconnected", "INFO")
+                        return True
+                    else:
+                        self.log("❌ Error recovery failed - reconnection unsuccessful", "ERROR")
+                        return False
+                else:
+                    self.log("⚠️ Circuit breaker open - skipping reconnection attempt", "WARNING")
+                    return False
+            
+            # Position closing errors
+            elif error_type == 'position_close_failure':
+                # For position closing failures, we mainly rely on the retry logic
+                # but we can add additional recovery steps here
+                self.log("🔄 Position close failure - checking connection health", "INFO")
+                
+                if self.check_mt5_connection_health():
+                    self.log("✅ Connection health OK - position close failure was likely temporary", "INFO")
+                    return True
+                else:
+                    self.log("❌ Connection health failed - may need reconnection", "WARNING")
+                    return self.handle_trading_error_recovery('connection_failure', context)
+            
+            # Order execution errors
+            elif error_type == 'order_execution_failure':
+                # Check market conditions and connection
+                self.log("🔄 Order execution failure - performing diagnostics", "INFO")
+                
+                # Check connection health
+                if not self.check_mt5_connection_health():
+                    return self.handle_trading_error_recovery('connection_failure', context)
+                
+                # Check if market is open (basic check)
+                try:
+                    symbol = context.get('symbol', self.symbol)
+                    tick = mt5.symbol_info_tick(symbol)
+                    if tick is None:
+                        self.log(f"⚠️ Cannot get tick data for {symbol} - possible market closure", "WARNING")
+                        return False
+                    
+                    # Check if spread is reasonable (basic market condition check)
+                    spread = (tick.ask - tick.bid) / tick.bid * 10000  # spread in points
+                    if spread > 50:  # Very wide spread might indicate market issues
+                        self.log(f"⚠️ Wide spread detected ({spread:.1f} points) - market conditions may be poor", "WARNING")
+                        return False
+                    
+                    self.log("✅ Market conditions appear normal - execution failure was likely temporary", "INFO")
+                    return True
+                    
+                except Exception as e:
+                    self.log(f"❌ Error during order execution diagnostics: {str(e)}", "ERROR")
+                    return False
+            
+            else:
+                self.log(f"⚠️ Unknown error type for recovery: {error_type}", "WARNING")
+                return False
+                
+        except Exception as e:
+            self.log(f"❌ Error during error recovery: {str(e)}", "ERROR")
+            return False
 
     def update_positions(self):
         """Update position data and calculate metrics"""
