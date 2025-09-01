@@ -245,15 +245,17 @@ class TradingSystem:
             },
             "order_execution": {
                 "max_retry_attempts": 5,
-                "base_retry_delay": 0.5,
-                "max_retry_delay": 8.0,
+                "base_retry_delay": 0.3,  # Reduced from 0.5s for faster recovery
+                "max_retry_delay": 4.0,   # Reduced from 8.0s to cap total time
                 "exponential_backoff": True,
+                "backoff_multiplier": 1.3,  # More conservative than 1.5
                 "price_staleness_threshold": 5.0,  # seconds
                 "price_deviation_threshold": 1.0,   # percentage
                 "connection_health_check_on_retry": True,
                 "validation_enabled": True,
-                "execution_timeout": 30.0,  # seconds
-                "detailed_logging": True
+                "execution_timeout": 15.0,  # Reduced from 30.0s
+                "detailed_logging": True,
+                "max_total_retry_time": 3.0  # New: abort if total time exceeds this
             }
         }
         
@@ -8593,7 +8595,7 @@ class TradingSystem:
             return {}
 
     def _validate_order_prerequisites(self, request: dict) -> Tuple[bool, str]:
-        """Comprehensive pre-order validation to catch issues before sending orders"""
+        """Optimized pre-order validation with improved symbol caching and reduced broker calls"""
         try:
             # Check if validation is enabled
             if not self.config["order_execution"]["validation_enabled"]:
@@ -8605,20 +8607,45 @@ class TradingSystem:
                 if field not in request:
                     return False, f"Missing required field: {field}"
             
-            # 2. Connection health validation (reduced from retry logic)
+            # 2. Quick connection check (reduced overhead)
             if not self.mt5_connected:
                 return False, "MT5 not connected"
-            
-            # Skip redundant connection health check if we're in retry context
-            # The retry logic will handle connection issues appropriately
             
             # 3. Circuit breaker check
             if self.circuit_breaker_open:
                 return False, "Circuit breaker is open - trading temporarily disabled"
             
-            # 4. Symbol validation - use cached symbol info if available to reduce calls
+            # 4. Optimized symbol validation with caching
             symbol = request["symbol"]
-            symbol_info = mt5.symbol_info(symbol)  # Single call instead of retry logic
+            
+            # Check if we have recent symbol info in cache
+            symbol_cache_key = f"symbol_info_{symbol}"
+            current_time = time.time()
+            
+            if hasattr(self, 'symbol_info_cache') and symbol_cache_key in self.symbol_info_cache:
+                cache_entry = self.symbol_info_cache[symbol_cache_key]
+                # Use cached info if less than 30 seconds old
+                if current_time - cache_entry['timestamp'] < 30:
+                    symbol_info = cache_entry['info']
+                else:
+                    # Refresh cache
+                    symbol_info = mt5.symbol_info(symbol)
+                    if not hasattr(self, 'symbol_info_cache'):
+                        self.symbol_info_cache = {}
+                    self.symbol_info_cache[symbol_cache_key] = {
+                        'info': symbol_info,
+                        'timestamp': current_time
+                    }
+            else:
+                # First time or no cache - get symbol info
+                symbol_info = mt5.symbol_info(symbol)
+                if not hasattr(self, 'symbol_info_cache'):
+                    self.symbol_info_cache = {}
+                self.symbol_info_cache[symbol_cache_key] = {
+                    'info': symbol_info,
+                    'timestamp': current_time
+                }
+            
             if symbol_info is None:
                 return False, f"Symbol {symbol} not available"
             
@@ -8628,8 +8655,13 @@ class TradingSystem:
                 if not mt5.symbol_select(symbol, True):
                     return False, f"Cannot select symbol {symbol} in Market Watch"
                 
-                # Quick re-verification after selection
+                # Update cache after Market Watch selection
                 symbol_info = mt5.symbol_info(symbol)
+                self.symbol_info_cache[symbol_cache_key] = {
+                    'info': symbol_info,
+                    'timestamp': current_time
+                }
+                
                 if symbol_info is None or not symbol_info.visible:
                     return False, f"Symbol {symbol} still not available after Market Watch selection"
             
@@ -8648,33 +8680,70 @@ class TradingSystem:
             if hasattr(symbol_info, 'trade_mode') and symbol_info.trade_mode == mt5.SYMBOL_TRADE_MODE_DISABLED:
                 return False, f"Trading disabled for symbol {symbol}"
             
-            # 7. Price validation (for market orders) - use relaxed thresholds
+            # 7. Optimized price validation for market orders
             if "price" in request:
                 price = request["price"]
                 if price <= 0:
                     return False, f"Invalid price: {price}"
                 
-                # Get current tick to validate price freshness
-                tick = mt5.symbol_info_tick(symbol)
+                # Use cached tick data if available to reduce broker calls
+                tick_cache_key = f"tick_{symbol}"
+                tick = None
+                
+                if hasattr(self, 'tick_cache') and tick_cache_key in self.tick_cache:
+                    cache_entry = self.tick_cache[tick_cache_key]
+                    # Use cached tick if less than 2 seconds old
+                    if current_time - cache_entry['timestamp'] < 2:
+                        tick = cache_entry['tick']
+                
+                if tick is None:
+                    # Get fresh tick data
+                    tick = mt5.symbol_info_tick(symbol)
+                    if tick is not None:
+                        if not hasattr(self, 'tick_cache'):
+                            self.tick_cache = {}
+                        self.tick_cache[tick_cache_key] = {
+                            'tick': tick,
+                            'timestamp': current_time
+                        }
+                
                 if tick is None:
                     return False, f"Cannot get current tick data for {symbol}"
                 
-                # Relaxed price staleness check (configurable threshold)
+                # Optimized price staleness check
                 staleness_threshold = self.config["order_execution"]["price_staleness_threshold"]
-                if hasattr(tick, 'time') and (time.time() - tick.time) > staleness_threshold:
+                if hasattr(tick, 'time') and (current_time - tick.time) > staleness_threshold:
                     return False, f"Tick data is stale (>{staleness_threshold}s old)"
                 
-                # More lenient price reasonableness check for volatile markets
+                # Efficient price reasonableness check
                 deviation_threshold = self.config["order_execution"]["price_deviation_threshold"]
                 current_price = tick.bid if request["type"] == mt5.ORDER_TYPE_SELL else tick.ask
                 if current_price > 0:  # Avoid division by zero
                     price_diff_pct = abs(price - current_price) / current_price * 100
                     if price_diff_pct > deviation_threshold:
                         self.log(f"⚠️ Price {price} differs from market {current_price} by {price_diff_pct:.2f}% (threshold: {deviation_threshold}%)", "WARNING")
-                        # For order execution, we'll allow this but warn - the market may have moved
+                        # For volatile markets like XAUUSD, we allow this but warn
             
-            # 8. Basic account validation (simplified)
-            account_info = mt5.account_info()
+            # 8. Optimized account validation with caching
+            account_cache_key = "account_info"
+            account_info = None
+            
+            if hasattr(self, 'account_cache') and account_cache_key in self.account_cache:
+                cache_entry = self.account_cache[account_cache_key]
+                # Use cached account info if less than 60 seconds old
+                if current_time - cache_entry['timestamp'] < 60:
+                    account_info = cache_entry['info']
+            
+            if account_info is None:
+                account_info = mt5.account_info()
+                if account_info is not None:
+                    if not hasattr(self, 'account_cache'):
+                        self.account_cache = {}
+                    self.account_cache[account_cache_key] = {
+                        'info': account_info,
+                        'timestamp': current_time
+                    }
+            
             if account_info is None:
                 return False, "Cannot get account information"
             
@@ -8686,6 +8755,35 @@ class TradingSystem:
             
         except Exception as e:
             return False, f"Validation error: {str(e)}"
+
+    def _cleanup_validation_caches(self):
+        """Clean up expired validation cache entries to prevent memory buildup"""
+        try:
+            current_time = time.time()
+            
+            # Clean symbol info cache (30 second expiry)
+            if hasattr(self, 'symbol_info_cache'):
+                expired_keys = [key for key, entry in self.symbol_info_cache.items() 
+                               if current_time - entry['timestamp'] > 30]
+                for key in expired_keys:
+                    del self.symbol_info_cache[key]
+            
+            # Clean tick cache (2 second expiry)
+            if hasattr(self, 'tick_cache'):
+                expired_keys = [key for key, entry in self.tick_cache.items()
+                               if current_time - entry['timestamp'] > 2]
+                for key in expired_keys:
+                    del self.tick_cache[key]
+            
+            # Clean account cache (60 second expiry)
+            if hasattr(self, 'account_cache'):
+                expired_keys = [key for key, entry in self.account_cache.items()
+                               if current_time - entry['timestamp'] > 60]
+                for key in expired_keys:
+                    del self.account_cache[key]
+                    
+        except Exception as e:
+            self.log(f"Error cleaning validation caches: {str(e)}", "WARNING")
 
     def _get_tick_data_with_retry(self, symbol: str, max_attempts: int = 3) -> Optional[Any]:
         """Get tick data with retry mechanism"""
@@ -8707,7 +8805,7 @@ class TradingSystem:
         return None
 
     def _execute_order_with_retry(self, request: dict, max_attempts: int = None) -> Optional[Any]:
-        """Enhanced order execution with improved retry mechanism and exponential backoff"""
+        """Optimized order execution with faster retry timing and timeout protection"""
         start_time = time.time()
         
         # Use configuration settings
@@ -8717,14 +8815,22 @@ class TradingSystem:
         base_delay = self.config["order_execution"]["base_retry_delay"]
         max_delay = self.config["order_execution"]["max_retry_delay"]
         use_exponential_backoff = self.config["order_execution"]["exponential_backoff"]
+        backoff_multiplier = self.config["order_execution"].get("backoff_multiplier", 1.3)
         check_health_on_retry = self.config["order_execution"]["connection_health_check_on_retry"]
         detailed_logging = self.config["order_execution"]["detailed_logging"]
+        max_total_retry_time = self.config["order_execution"].get("max_total_retry_time", 3.0)
         
         # Track if we've already had a connection failure to avoid redundant health checks
         connection_failed_once = False
         
         for attempt in range(max_attempts):
             attempt_start = time.time()
+            
+            # Check if we've exceeded maximum total retry time
+            elapsed_time = time.time() - start_time
+            if elapsed_time > max_total_retry_time:
+                self.log(f"❌ Aborting retries: exceeded max total time {max_total_retry_time}s (elapsed: {elapsed_time:.1f}s)", "WARNING")
+                break
             
             try:
                 # Pre-order connection health check only after first connection failure
@@ -8733,7 +8839,11 @@ class TradingSystem:
                         self.log(f"Connection health check failed before retry {attempt + 1}", "WARNING")
                         if attempt < max_attempts - 1:
                             # Use simpler delay calculation for connection issues
-                            delay = min(base_delay * (1 + attempt * 0.5), max_delay)
+                            delay = min(base_delay * (1 + attempt * 0.3), max_delay)
+                            # Check if delay would exceed timeout
+                            if elapsed_time + delay > max_total_retry_time:
+                                self.log(f"❌ Skipping delay: would exceed timeout", "WARNING")
+                                break
                             time.sleep(delay)
                             continue
                         return None
@@ -8750,13 +8860,19 @@ class TradingSystem:
                     if attempt < max_attempts - 1:
                         # Use more conservative backoff for None returns
                         if use_exponential_backoff:
-                            delay = min(base_delay * (1.5 ** attempt), max_delay)  # Less aggressive than 2^attempt
+                            delay = min(base_delay * (backoff_multiplier ** attempt), max_delay)
                         else:
-                            delay = min(base_delay + (attempt * 0.3), max_delay)  # Smaller increments
+                            delay = min(base_delay + (attempt * 0.2), max_delay)  # Smaller increments
                         
                         # Simple jitter to prevent thundering herd
-                        jitter = random.uniform(0.1, 0.3)
+                        jitter = random.uniform(0.05, 0.15)  # Reduced jitter
                         delay = min(delay + jitter, max_delay)
+                        
+                        # Check timeout before sleeping
+                        elapsed_time = time.time() - start_time
+                        if elapsed_time + delay > max_total_retry_time:
+                            self.log(f"❌ Skipping delay: would exceed timeout (elapsed: {elapsed_time:.1f}s)", "WARNING")
+                            break
                         
                         if detailed_logging:
                             self.log(f"   Retrying in {delay:.1f}s...", "INFO")
@@ -8800,16 +8916,22 @@ class TradingSystem:
                             else:
                                 self.log("   ⚠️ Could not update price - tick data unavailable", "WARNING")
                         
-                        # Calculate retry delay with more conservative approach
+                        # Calculate retry delay with optimized approach
                         if use_exponential_backoff:
-                            # More conservative exponential backoff: 0.5s → 1s → 1.5s → 2.25s → 3.4s
-                            delay = min(base_delay * (1.5 ** attempt), max_delay)
+                            # More conservative exponential backoff: 0.3s → 0.39s → 0.51s → 0.66s → 0.86s
+                            delay = min(base_delay * (backoff_multiplier ** attempt), max_delay)
                         else:
-                            delay = min(base_delay + (attempt * 0.3), max_delay)
+                            delay = min(base_delay + (attempt * 0.2), max_delay)
                         
-                        # Simple jitter to prevent thundering herd
-                        jitter = random.uniform(0.1, 0.3)
+                        # Reduced jitter to minimize total time
+                        jitter = random.uniform(0.05, 0.15)
                         delay = min(delay + jitter, max_delay)
+                        
+                        # Check timeout before sleeping
+                        elapsed_time = time.time() - start_time
+                        if elapsed_time + delay > max_total_retry_time:
+                            self.log(f"❌ Skipping delay: would exceed timeout (elapsed: {elapsed_time:.1f}s)", "WARNING")
+                            break
                         
                         if detailed_logging:
                             self.log(f"   Retrying in {delay:.1f}s...", "INFO")
@@ -8837,13 +8959,19 @@ class TradingSystem:
                 if attempt < max_attempts - 1:
                     # Use conservative backoff for exceptions
                     if use_exponential_backoff:
-                        delay = min(base_delay * (1.5 ** attempt), max_delay)
+                        delay = min(base_delay * (backoff_multiplier ** attempt), max_delay)
                     else:
-                        delay = min(base_delay + (attempt * 0.3), max_delay)
+                        delay = min(base_delay + (attempt * 0.2), max_delay)
                     
-                    # Simple jitter for exception handling consistency
-                    jitter = random.uniform(0.1, 0.3)
+                    # Reduced jitter for exception handling consistency
+                    jitter = random.uniform(0.05, 0.15)
                     delay = min(delay + jitter, max_delay)
+                    
+                    # Check timeout before sleeping
+                    elapsed_time = time.time() - start_time
+                    if elapsed_time + delay > max_total_retry_time:
+                        self.log(f"❌ Skipping delay: would exceed timeout (elapsed: {elapsed_time:.1f}s)", "WARNING")
+                        break
                     
                     if detailed_logging:
                         self.log(f"   Retrying in {delay:.1f}s due to exception...", "INFO")
