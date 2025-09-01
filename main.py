@@ -1685,7 +1685,14 @@ class TradingSystem:
         """แบ่ง positions ตาม price zones และวิเคราะห์การกระจาย"""
         try:
             if not self.positions:
-                return {'zones': {}, 'distribution_score': 100.0, 'clustered_zones': [], 'empty_zones': []}
+                return {
+                    'zones': {}, 
+                    'distribution_score': 100.0, 
+                    'clustered_zones': [], 
+                    'empty_zones': [],
+                    'total_zones_used': 0,
+                    'current_price': 0.0
+                }
             
             # Get current market price for reference
             current_price = 0
