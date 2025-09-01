@@ -110,6 +110,7 @@ class InputValidator:
         return direction
 
 @dataclass
+@dataclass
 class Signal:
     """Signal data structure"""
     timestamp: datetime
@@ -192,6 +193,19 @@ class TradingSystem:
         self.max_hold_hours = 48
         self.gentle_management = True
         self.emergency_mode_threshold = 25  # portfolio health
+
+        # 🎯 Zone-Based Trading System Configuration
+        self.zone_size_pips = 25  # ขนาด zone (pips)
+        self.max_positions_per_zone = 3  # จำกัดไม้ต่อ zone
+        self.min_position_distance_pips = 15  # ระยะห่างขั้นต่ำระหว่างไม้
+        self.force_zone_diversification = True  # บังคับกระจาย
+        
+        # 📊 Dynamic Lot Sizing Configuration
+        self.base_lot_size = 0.01  # lot พื้นฐาน
+        self.max_lot_size = 0.10   # lot สูงสุด
+        self.lot_multiplier_range = (0.5, 3.0)  # ช่วงการคูณ lot
+        self.equity_based_sizing = True  # ปรับตาม equity
+        self.signal_strength_multiplier = True  # ปรับตาม signal strength
 
         # Auto-detect filling type
         self.filling_type = None
@@ -1507,29 +1521,34 @@ class TradingSystem:
             return {'should_trade': False, 'confidence': 0.0}
 
     def calculate_dynamic_lot_size(self, signal: Signal) -> float:
-        """Calculate advanced dynamic lot size with multiple factors"""
+        """Calculate enhanced dynamic lot size with zone-based risk management"""
         try:
             # 1. Base lot จาก signal strength
-            base_lot = self.base_lot * signal.strength
+            base_lot = self.base_lot_size * signal.strength if hasattr(signal, 'strength') else self.base_lot_size
             
-            # 2. Account equity adjustment
-            account_info = mt5.account_info()
-            if account_info:
-                equity = account_info.equity
-                balance = account_info.balance
-                
-                # Risk per trade = 1-3% ของ equity ตาม signal strength
-                risk_percent = 0.01 + (signal.strength - 0.5) * 0.008  # 1%-3%
-                risk_amount = equity * risk_percent
-                
-                # คำนวณ lot จาก risk amount (สมมติ stop loss 50 pips)
-                pip_value = 1.0  # XAUUSD 1 pip = $1 per 0.01 lot
-                stop_loss_pips = 50
-                lot_from_risk = risk_amount / (stop_loss_pips * pip_value * 100)
-                
-                base_lot = min(base_lot, lot_from_risk)
+            # 2. Account equity adjustment (if MT5 available)
+            if MT5_AVAILABLE and mt5 and self.mt5_connected:
+                account_info = mt5.account_info()
+                if account_info and self.equity_based_sizing:
+                    equity = account_info.equity
+                    
+                    # Risk per trade = 1-3% ของ equity ตาม signal strength
+                    signal_strength = getattr(signal, 'strength', 1.0)
+                    risk_percent = 0.01 + (signal_strength - 0.5) * 0.008  # 1%-3%
+                    risk_amount = equity * risk_percent
+                    
+                    # คำนวณ lot จาก risk amount (สมมติ stop loss 50 pips)
+                    pip_value = 1.0  # XAUUSD 1 pip = $1 per 0.01 lot
+                    stop_loss_pips = 50
+                    lot_from_risk = risk_amount / (stop_loss_pips * pip_value * 100)
+                    
+                    base_lot = min(base_lot, lot_from_risk)
             
-            # 3. Portfolio balance adjustment (ปรับสมดุล BUY/SELL)
+            # 🎯 3. Zone-Based Risk Adjustment
+            zone_risk_factor = self.calculate_zone_risk_factor(signal)
+            base_lot *= zone_risk_factor
+            
+            # 4. Portfolio balance adjustment (ปรับสมดุล BUY/SELL)
             total_volume = self.buy_volume + self.sell_volume
             if total_volume > 0:
                 buy_ratio = self.buy_volume / total_volume
@@ -1547,21 +1566,21 @@ class TradingSystem:
                     elif sell_ratio < 0.35:  # SELL น้อยเกินไป
                         base_lot *= 1.5  # เพิ่ม lot
             
-            # 4. Market volatility adjustment
+            # 5. Market volatility adjustment
             if hasattr(self, 'recent_volatility'):
                 if self.recent_volatility > 2.0:  # ตลาดผันผวนสูง
                     base_lot *= 0.7  # ลด lot
                 elif self.recent_volatility < 0.5:  # ตลาดเงียบ
                     base_lot *= 1.3  # เพิ่ม lot
             
-            # 5. Position count adjustment
+            # 6. Position count adjustment
             position_count = len(self.positions)
             if position_count > 30:
                 base_lot *= 0.8  # มี position เยอะแล้ว ลด lot
             elif position_count < 10:
                 base_lot *= 1.2  # มี position น้อย เพิ่ม lot
             
-            # 6. Time-based adjustment (ตามเวลาเทรด)
+            # 7. Time-based adjustment (ตามเวลาเทรด)
             current_hour = datetime.now().hour
             if 22 <= current_hour or current_hour <= 2:  # เวลาเทรดหลัก
                 base_lot *= 1.2
@@ -1572,25 +1591,283 @@ class TradingSystem:
             else:  # เวลาเทรดเงียบ
                 base_lot *= 0.8
             
-            # 7. Portfolio health adjustment
+            # 8. Portfolio health adjustment
             if self.portfolio_health < 50:
                 base_lot *= 0.6  # Portfolio ไม่ดี ลด lot
             elif self.portfolio_health > 80:
                 base_lot *= 1.3  # Portfolio ดี เพิ่ม lot
             
-            # Round และ limit lot size
+            # 9. Signal strength multiplier (if enabled)
+            if self.signal_strength_multiplier and hasattr(signal, 'strength'):
+                multiplier = max(self.lot_multiplier_range[0], 
+                               min(self.lot_multiplier_range[1], signal.strength))
+                base_lot *= multiplier
+            
+            # 10. Final validation and rounding
             lot_size = round(base_lot, 2)
-            lot_size = max(0.01, min(2.0, lot_size))  # ขั้นต่ำ 0.01, สูงสุด 2.0
+            lot_size = max(self.base_lot_size, min(self.max_lot_size, lot_size))
             
             return lot_size
             
         except Exception as e:
-            self.log(f"Error calculating dynamic lot size: {str(e)}", "ERROR")
-            return self.base_lot
+            self.log(f"Error calculating enhanced dynamic lot size: {str(e)}", "ERROR")
+            return self.base_lot_size
+
+    def calculate_zone_risk_factor(self, signal: Signal) -> float:
+        """คำนวณ risk factor ตาม zone analysis"""
+        try:
+            if not self.positions:
+                return 1.0  # No positions, normal risk
+            
+            zone_analysis = self.analyze_position_zones()
+            
+            # Base risk factor
+            risk_factor = 1.0
+            
+            # 1. Zone distribution score impact
+            distribution_score = zone_analysis.get('distribution_score', 100.0)
+            if distribution_score < 50:
+                risk_factor *= 0.7  # Poor distribution, reduce lot size
+            elif distribution_score > 80:
+                risk_factor *= 1.2  # Good distribution, allow larger lots
+            
+            # 2. Check for signal price clustering
+            if hasattr(signal, 'price') and signal.price:
+                if self.check_position_clustering(signal.price):
+                    risk_factor *= 0.3  # Severe clustering risk, drastically reduce lot
+            
+            # 3. Congested zones impact
+            congested_zones = zone_analysis.get('clustered_zones', [])
+            if len(congested_zones) > 2:  # More than 2 congested zones
+                risk_factor *= 0.8  # Multiple congested zones, reduce risk
+            
+            # 4. Empty zones opportunity
+            empty_zones = zone_analysis.get('empty_zones', [])
+            total_zones_used = zone_analysis.get('total_zones_used', 1)
+            
+            if len(empty_zones) > total_zones_used:  # More empty than used zones
+                risk_factor *= 1.1  # Good diversification opportunity
+            
+            # Ensure risk factor stays within reasonable bounds
+            return max(0.2, min(2.0, risk_factor))
+            
+        except Exception as e:
+            self.log(f"Error calculating zone risk factor: {str(e)}", "ERROR")
+            return 1.0
+
+    def calculate_risk_based_volume(self, signal: Signal, zone_risk: float) -> float:
+        """ปรับ volume ตาม risk level ของแต่ละ zone"""
+        try:
+            base_volume = self.calculate_dynamic_lot_size(signal)
+            
+            # Apply zone risk adjustment
+            adjusted_volume = base_volume * zone_risk
+            
+            # Additional validation
+            if zone_risk < 0.5:  # High risk zone
+                adjusted_volume = min(adjusted_volume, self.base_lot_size * 1.5)
+            elif zone_risk > 1.5:  # Low risk zone
+                adjusted_volume = min(adjusted_volume, self.max_lot_size * 0.8)
+            
+            return max(self.base_lot_size, min(self.max_lot_size, adjusted_volume))
+            
+        except Exception as e:
+            self.log(f"Error calculating risk-based volume: {str(e)}", "ERROR")
+            return self.base_lot_size
 
     def calculate_lot_size(self, signal: Signal) -> float:
         """Calculate dynamic lot size - wrapper for new method"""
         return self.calculate_dynamic_lot_size(signal)
+
+    # 🎯 Zone-Based Trading System Methods
+    
+    def analyze_position_zones(self) -> dict:
+        """แบ่ง positions ตาม price zones และวิเคราะห์การกระจาย"""
+        try:
+            if not self.positions:
+                return {
+                    'zones': {}, 
+                    'distribution_score': 100.0, 
+                    'clustered_zones': [], 
+                    'empty_zones': [],
+                    'total_zones_used': 0,
+                    'current_price': 0.0
+                }
+            
+            # Get current market price for reference
+            current_price = 0
+            if MT5_AVAILABLE and mt5 and self.mt5_connected:
+                tick = mt5.symbol_info_tick(self.symbol)
+                if tick:
+                    current_price = tick.bid
+            
+            if current_price == 0:
+                # Fallback to average of position prices
+                current_price = sum(p.current_price for p in self.positions) / len(self.positions)
+            
+            # Group positions by zones
+            zones = {}
+            # For XAUUSD: 1 pip = 0.1 point, so 25 pips = 2.5 points
+            zone_size = self.zone_size_pips * 0.1  # Convert pips to price units for XAUUSD
+            
+            for position in self.positions:
+                # Calculate zone index based on price difference from current price
+                price_diff = position.open_price - current_price
+                zone_index = int(price_diff / zone_size)
+                
+                if zone_index not in zones:
+                    zones[zone_index] = {
+                        'positions': [],
+                        'buy_count': 0,
+                        'sell_count': 0,
+                        'total_volume': 0.0,
+                        'avg_price': 0.0,
+                        'zone_range': (
+                            current_price + (zone_index * zone_size),
+                            current_price + ((zone_index + 1) * zone_size)
+                        )
+                    }
+                
+                zones[zone_index]['positions'].append(position)
+                zones[zone_index]['total_volume'] += position.volume
+                
+                if position.type == 'BUY':
+                    zones[zone_index]['buy_count'] += 1
+                else:
+                    zones[zone_index]['sell_count'] += 1
+            
+            # Calculate average price for each zone
+            for zone_data in zones.values():
+                if zone_data['positions']:
+                    zone_data['avg_price'] = sum(p.open_price for p in zone_data['positions']) / len(zone_data['positions'])
+            
+            # Calculate distribution score and identify issues
+            distribution_score = self.calculate_zone_distribution_score(zones)
+            clustered_zones = self.get_congested_zones(zones)
+            empty_zones = self.get_empty_zones(zones, current_price)
+            
+            return {
+                'zones': zones,
+                'distribution_score': distribution_score,
+                'clustered_zones': clustered_zones,
+                'empty_zones': empty_zones,
+                'total_zones_used': len(zones),
+                'current_price': current_price
+            }
+            
+        except Exception as e:
+            self.log(f"Error analyzing position zones: {str(e)}", "ERROR")
+            return {'zones': {}, 'distribution_score': 0.0, 'clustered_zones': [], 'empty_zones': []}
+
+    def calculate_zone_distribution_score(self, zones: dict) -> float:
+        """คำนวณคะแนนการกระจายตัวของ zones (0-100)"""
+        try:
+            if not zones:
+                return 100.0
+            
+            total_positions = sum(len(zone['positions']) for zone in zones.values())
+            if total_positions == 0:
+                return 100.0
+            
+            score = 100.0
+            
+            # 1. Penalize overcrowded zones (40 points)
+            overcrowded_penalty = 0
+            for zone_data in zones.values():
+                position_count = len(zone_data['positions'])
+                if position_count > self.max_positions_per_zone:
+                    overcrowded_penalty += (position_count - self.max_positions_per_zone) * 10
+            
+            score -= min(40, overcrowded_penalty)
+            
+            # 2. Reward even distribution (30 points)
+            zone_counts = [len(zone['positions']) for zone in zones.values()]
+            avg_per_zone = sum(zone_counts) / len(zone_counts)
+            variance = sum((count - avg_per_zone) ** 2 for count in zone_counts) / len(zone_counts)
+            distribution_score = max(0, 30 - (variance * 5))
+            score = score - 30 + distribution_score
+            
+            # 3. Penalize clustering (30 points)
+            clustering_penalty = 0
+            zone_indices = sorted(zones.keys())
+            consecutive_zones = 0
+            for i in range(len(zone_indices) - 1):
+                if zone_indices[i+1] - zone_indices[i] == 1:  # Adjacent zones
+                    consecutive_zones += 1
+            
+            if consecutive_zones > 2:  # More than 2 consecutive zones
+                clustering_penalty = (consecutive_zones - 2) * 10
+            
+            score -= min(30, clustering_penalty)
+            
+            return max(0.0, min(100.0, score))
+            
+        except Exception as e:
+            self.log(f"Error calculating zone distribution score: {str(e)}", "ERROR")
+            return 50.0
+
+    def get_empty_zones(self, zones: dict, current_price: float) -> List[int]:
+        """หา zones ที่ว่างเปล่าใกล้ราคาปัจจุบัน"""
+        try:
+            if not zones:
+                return list(range(-2, 3))  # Return zones around current price
+            
+            used_zone_indices = set(zones.keys())
+            min_zone = min(used_zone_indices)
+            max_zone = max(used_zone_indices)
+            
+            # Check for gaps in the range
+            empty_zones = []
+            for zone_idx in range(min_zone - 2, max_zone + 3):
+                if zone_idx not in used_zone_indices:
+                    empty_zones.append(zone_idx)
+            
+            return empty_zones
+            
+        except Exception as e:
+            self.log(f"Error finding empty zones: {str(e)}", "ERROR")
+            return []
+
+    def get_congested_zones(self, zones: dict) -> List[dict]:
+        """หา zones ที่มี positions เกินขีดจำกัด"""
+        try:
+            congested = []
+            for zone_idx, zone_data in zones.items():
+                position_count = len(zone_data['positions'])
+                if position_count > self.max_positions_per_zone:
+                    congested.append({
+                        'zone_index': zone_idx,
+                        'position_count': position_count,
+                        'excess_positions': position_count - self.max_positions_per_zone,
+                        'zone_range': zone_data['zone_range']
+                    })
+            
+            return sorted(congested, key=lambda x: x['excess_positions'], reverse=True)
+            
+        except Exception as e:
+            self.log(f"Error finding congested zones: {str(e)}", "ERROR")
+            return []
+
+    def check_position_clustering(self, target_price: float) -> bool:
+        """ตรวจสอบว่าจะเกิด clustering หรือไม่ถ้าเปิด position ที่ราคานี้"""
+        try:
+            if not self.positions:
+                return False
+            
+            min_distance = self.min_position_distance_pips * 0.1  # Convert pips to price units for XAUUSD
+            
+            # Check distance to all existing positions
+            for position in self.positions:
+                distance = abs(target_price - position.open_price)
+                if distance < min_distance:
+                    self.log(f"🚫 Position clustering detected: {distance*10:.1f} pips < {self.min_position_distance_pips} pips minimum")
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            self.log(f"Error checking position clustering: {str(e)}", "ERROR")
+            return False
 
     def calculate_advanced_position_score(self, position: Position) -> dict:
         """คำนวณคะแนน position แบบขั้นสูง"""
@@ -1795,8 +2072,17 @@ class TradingSystem:
                 self.log("❌ Circuit breaker is open, cannot execute orders", "WARNING")
                 return False
                 
-            # ใช้ Smart Signal Router
+            # ใช้ Enhanced Smart Signal Router with Zone Analysis
             router_result = self.smart_signal_router(signal)
+            
+            # 🎯 Log zone analysis if available
+            if 'zone_analysis' in router_result['details'] and router_result['details']['zone_analysis']:
+                zone_data = router_result['details']['zone_analysis']
+                self.log(f"🗺️ Zone Analysis: {zone_data['total_zones_used']} zones, score: {zone_data['distribution_score']:.1f}")
+                if zone_data['clustered_zones']:
+                    self.log(f"   ⚠️ Congested zones: {len(zone_data['clustered_zones'])}")
+                if zone_data['empty_zones']:
+                    self.log(f"   📍 Empty zones available: {len(zone_data['empty_zones'])}")
             
             if router_result['action'] == 'skip':
                 self.log(f"⏭️ Signal SKIPPED: {signal.direction} - {router_result['details']['reason']}")
@@ -2127,7 +2413,8 @@ class TradingSystem:
 
     def smart_signal_router(self, signal: Signal) -> Dict[str, Any]:
         """
-        Smart Signal Router - ตัดสินใจว่าจะ execute, redirect หรือ skip signal
+        Enhanced Smart Signal Router with Zone-Based Analysis
+        ตัดสินใจว่าจะ execute, redirect หรือ skip signal โดยพิจารณา zone distribution
         Returns: {'action': 'execute'/'redirect'/'skip', 'details': {...}}
         """
         try:
@@ -2137,12 +2424,33 @@ class TradingSystem:
                     'original_signal': signal,
                     'reason': 'Normal execution',
                     'redirect_target': None,
-                    'profit_captured': 0.0
+                    'profit_captured': 0.0,
+                    'zone_analysis': None
                 }
             }
             
             if not self.smart_router_enabled or not self.positions:
                 return result
+            
+            # 🎯 PHASE 1: Zone-Based Analysis
+            zone_analysis = self.analyze_position_zones()
+            result['details']['zone_analysis'] = zone_analysis
+            
+            # Check position clustering first
+            if self.force_zone_diversification and hasattr(signal, 'price') and signal.price:
+                if self.check_position_clustering(signal.price):
+                    # Try to find alternative zone for signal
+                    alternative_zone = self.find_best_zone_for_signal(signal, zone_analysis)
+                    if alternative_zone['should_redirect']:
+                        result['action'] = 'redirect'
+                        result['details'].update(alternative_zone)
+                        result['details']['reason'] = f"Zone diversification: {alternative_zone['reason']}"
+                        return result
+                    else:
+                        result['action'] = 'skip'
+                        result['details']['reason'] = 'Position clustering prevention - no suitable alternative'
+                        self.log(f"🚫 Signal SKIPPED: {signal.direction} - Position clustering prevented")
+                        return result
             
             # 1. Check redirect cooldown
             if (self.last_redirect_time and 
@@ -2163,13 +2471,22 @@ class TradingSystem:
             
             buy_ratio = self.buy_volume / total_volume
             
-            # 4. Check if redirect is beneficial
+            # 🎯 PHASE 2: Zone-Based Redirect Analysis
+            zone_redirect_analysis = self.should_redirect_for_zone_balance(signal, zone_analysis, buy_ratio)
+            
+            if zone_redirect_analysis['should_redirect']:
+                result['action'] = 'redirect'
+                result['details'].update(zone_redirect_analysis)
+                self.log(f"🔄 Zone-Based REDIRECT: {signal.direction} → {zone_redirect_analysis['reason']}")
+                return result
+            
+            # 4. Check traditional volume-based redirect
             redirect_analysis = self.analyze_redirect_opportunity(signal, buy_ratio)
             
             if redirect_analysis['should_redirect']:
                 result['action'] = 'redirect'
-                result['details'] = redirect_analysis
-                self.log(f"🔄 Signal REDIRECTED: {signal.direction} → Close {redirect_analysis['target_type']}")
+                result['details'].update(redirect_analysis)
+                self.log(f"🔄 Volume-Based REDIRECT: {signal.direction} → Close {redirect_analysis['target_type']}")
                 self.log(f"   Reason: {redirect_analysis['reason']}")
                 return result
             
@@ -2179,11 +2496,135 @@ class TradingSystem:
                 result['details']['reason'] = 'Signal skipped for portfolio protection'
                 return result
             
+            # 6. Final zone distribution check
+            if zone_analysis['distribution_score'] < 30:  # Poor distribution
+                self.log(f"⚠️ Poor zone distribution (score: {zone_analysis['distribution_score']:.1f})")
+                result['details']['reason'] += ' - Poor zone distribution warning'
+            
             return result
             
         except Exception as e:
-            self.log(f"Error in smart signal router: {str(e)}", "ERROR")
+            self.log(f"Error in enhanced smart signal router: {str(e)}", "ERROR")
             return {'action': 'execute', 'details': {'reason': 'Router error - default execute'}}
+
+    def should_redirect_for_zone_balance(self, signal: Signal, zone_analysis: dict, buy_ratio: float) -> dict:
+        """ตรวจสอบว่าควร redirect เพื่อ zone balance หรือไม่"""
+        try:
+            result = {
+                'should_redirect': False,
+                'reason': '',
+                'target_position': None,
+                'profit_captured': 0.0,
+                'zone_improvement': 0.0
+            }
+            
+            zones = zone_analysis.get('zones', {})
+            congested_zones = zone_analysis.get('clustered_zones', [])
+            
+            if not zones or not congested_zones:
+                return result
+            
+            # Find positions in congested zones that could be closed
+            candidates = []
+            for congested_zone in congested_zones:
+                zone_idx = congested_zone['zone_index']
+                if zone_idx in zones:
+                    zone_positions = zones[zone_idx]['positions']
+                    for pos in zone_positions:
+                        # Only consider profitable positions
+                        if pos.profit > self.min_profit_for_redirect_close:
+                            candidates.append({
+                                'position': pos,
+                                'zone_index': zone_idx,
+                                'profit': pos.profit,
+                                'zone_congestion': congested_zone['excess_positions']
+                            })
+            
+            if not candidates:
+                return result
+            
+            # Score candidates based on zone improvement and profit
+            best_candidate = None
+            best_score = 0
+            
+            for candidate in candidates:
+                pos = candidate['position']
+                
+                # Calculate score based on profit and zone improvement
+                profit_score = min(40, pos.profit / 2)  # Max 40 points
+                congestion_score = candidate['zone_congestion'] * 10  # 10 points per excess position
+                
+                # Volume match with signal
+                signal_volume = self.calculate_lot_size(signal)
+                volume_diff = abs(signal_volume - pos.volume)
+                volume_score = max(0, 20 - (volume_diff * 100))  # Max 20 points
+                
+                total_score = profit_score + congestion_score + volume_score
+                
+                if total_score > best_score and total_score > 50:
+                    best_score = total_score
+                    best_candidate = candidate
+            
+            if best_candidate:
+                pos = best_candidate['position']
+                result.update({
+                    'should_redirect': True,
+                    'reason': f"Zone decongestion - close {pos.type} from overcrowded zone {best_candidate['zone_index']}",
+                    'target_position': pos,
+                    'profit_captured': pos.profit,
+                    'zone_improvement': best_candidate['zone_congestion']
+                })
+            
+            return result
+            
+        except Exception as e:
+            self.log(f"Error in zone balance redirect analysis: {str(e)}", "ERROR")
+            return {'should_redirect': False}
+
+    def find_best_zone_for_signal(self, signal: Signal, zone_analysis: dict) -> dict:
+        """หา zone ที่เหมาะสมที่สุดสำหรับ signal ถ้าไม่สามารถเปิดที่ราคาปัจจุบันได้"""
+        try:
+            result = {
+                'should_redirect': False,
+                'reason': '',
+                'target_position': None,
+                'alternative_action': 'skip'
+            }
+            
+            empty_zones = zone_analysis.get('empty_zones', [])
+            current_price = zone_analysis.get('current_price', 0)
+            
+            if not empty_zones or current_price == 0:
+                return result
+            
+            # Look for profitable positions in congested zones that could be closed
+            zones = zone_analysis.get('zones', {})
+            congested_zones = zone_analysis.get('clustered_zones', [])
+            
+            for congested_zone in congested_zones:
+                zone_idx = congested_zone['zone_index']
+                if zone_idx in zones:
+                    zone_positions = zones[zone_idx]['positions']
+                    
+                    # Find a profitable position of opposite type
+                    for pos in zone_positions:
+                        if (pos.type != signal.direction and 
+                            pos.profit > self.min_profit_for_redirect_close):
+                            
+                            result.update({
+                                'should_redirect': True,
+                                'reason': f"Close profitable {pos.type} from congested zone to make room for {signal.direction}",
+                                'target_position': pos,
+                                'profit_captured': pos.profit,
+                                'alternative_action': 'redirect_and_execute'
+                            })
+                            return result
+            
+            return result
+            
+        except Exception as e:
+            self.log(f"Error finding best zone for signal: {str(e)}", "ERROR")
+            return {'should_redirect': False}
 
     def analyze_redirect_opportunity(self, signal: Signal, buy_ratio: float) -> dict:
         """วิเคราะห์โอกาสในการ redirect signal"""
