@@ -555,8 +555,10 @@ class UnifiedDecisionEngine:
                                   decision: Dict[str, Any]) -> float:
         """Phase 6: Calculate lot size using single unified method"""
         try:
-            # Base lot size
-            base_lot = self.lot_params.get("base_lot_size", 0.01)
+            # Base lot size with fallback
+            base_lot = self.lot_params.get("base_lot_size") or 0.01
+            if base_lot is None:
+                base_lot = 0.01
             
             # Signal strength multiplier
             signal_strength = getattr(signal, 'strength', 1.0)
@@ -567,6 +569,8 @@ class UnifiedDecisionEngine:
             
             # Risk-based sizing
             risk_range = self.lot_params.get("risk_percent_range", [0.01, 0.03])
+            if not risk_range or len(risk_range) != 2:
+                risk_range = [0.01, 0.03]
             risk_percent = risk_range[0] + (scores["safety"] * (risk_range[1] - risk_range[0]))
             
             # Portfolio health adjustment
@@ -591,8 +595,12 @@ class UnifiedDecisionEngine:
                             confidence_multiplier)
             
             # Apply bounds
-            min_lot = self.lot_params.get("base_lot_size", 0.01)
-            max_lot = self.lot_params.get("max_lot_size", 0.10)
+            min_lot = self.lot_params.get("base_lot_size") or 0.01
+            if min_lot is None:
+                min_lot = 0.01
+            max_lot = self.lot_params.get("max_lot_size") or 0.10
+            if max_lot is None:
+                max_lot = 0.10
             
             final_lot = max(min_lot, min(max_lot, calculated_lot))
             
@@ -603,7 +611,7 @@ class UnifiedDecisionEngine:
             
         except Exception as e:
             logger.error(f"Lot size calculation error: {str(e)}")
-            return self.lot_params.get("base_lot_size", 0.01)
+            return 0.01  # Safe fallback
     
     def _should_redirect(self, scores: Dict[str, float], state: Dict[str, Any]) -> bool:
         """Check if redirect is beneficial"""

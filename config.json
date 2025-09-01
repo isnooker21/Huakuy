@@ -2,7 +2,7 @@
   "trading_parameters": {
     "symbol": "XAUUSD.v",
     "base_lot_size": 0.01,
-    "max_lot_size": 0.10,
+    "max_lot_size": 0.1,
     "max_positions": 50,
     "min_margin_level": 200.0,
     "signal_cooldown": 60,
@@ -11,7 +11,7 @@
   "decision_weights": {
     "safety_check": 0.35,
     "portfolio_health": 0.25,
-    "zone_distribution": 0.20,
+    "zone_distribution": 0.2,
     "balance_optimization": 0.15,
     "signal_quality": 0.05
   },
@@ -38,12 +38,19 @@
     "zone_recalc_threshold": 0.1
   },
   "lot_sizing": {
-    "lot_multiplier_range": [0.5, 3.0],
+    "lot_multiplier_range": [
+      0.5,
+      3.0
+    ],
     "equity_based_sizing": true,
     "signal_strength_multiplier": true,
-    "risk_percent_range": [0.01, 0.03],
+    "risk_percent_range": [
+      0.01,
+      0.03
+    ],
     "stop_loss_pips": 50,
-    "pip_value": 1.0
+    "pip_value": 1.0,
+    "base_lot_size": 0.01
   },
   "risk_management": {
     "anti_exposure_enabled": true,

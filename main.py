@@ -1746,8 +1746,9 @@ class TradingSystem:
     def calculate_dynamic_lot_size(self, signal: Signal) -> float:
         """Calculate enhanced dynamic lot size with zone-based risk management"""
         try:
-            # 1. Base lot จาก signal strength
-            base_lot = self.base_lot_size * signal.strength if hasattr(signal, 'strength') else self.base_lot_size
+            # 1. Base lot จาก signal strength (with fallback)
+            base_lot_size = getattr(self, 'base_lot_size', None) or self.base_lot or 0.01
+            base_lot = base_lot_size * signal.strength if hasattr(signal, 'strength') else base_lot_size
             
             # 2. Account equity adjustment (if MT5 available)
             if MT5_AVAILABLE and mt5 and self.mt5_connected:
