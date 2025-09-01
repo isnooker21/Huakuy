@@ -46,6 +46,22 @@ import platform
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+def serialize_datetime(obj):
+    """Convert datetime objects to ISO strings for JSON serialization"""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    return obj
+
+def serialize_datetime_dict(data):
+    """Recursively convert datetime objects in nested dictionaries to ISO strings"""
+    if isinstance(data, dict):
+        return {k: serialize_datetime_dict(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [serialize_datetime_dict(item) for item in data]
+    elif isinstance(data, datetime):
+        return data.isoformat()
+    return data
+
 class ValidationError(Exception):
     """Custom validation error"""
     pass
@@ -55,7 +71,7 @@ class InputValidator:
     
     @staticmethod
     def validate_volume(volume: float, min_volume: float = 0.01, max_volume: float = 100.0) -> float:
-        """Validate trading volume"""
+        """Validate trading volume with MT5 compatibility"""
         if not isinstance(volume, (int, float)):
             raise ValidationError(f"Volume must be numeric, got {type(volume)}")
         
@@ -63,9 +79,18 @@ class InputValidator:
         if volume <= 0:
             raise ValidationError(f"Volume must be positive, got {volume}")
         if volume < min_volume:
-            raise ValidationError(f"Volume {volume} below minimum {min_volume}")
+            # Round up to minimum instead of failing
+            volume = min_volume
         if volume > max_volume:
-            raise ValidationError(f"Volume {volume} exceeds maximum {max_volume}")
+            # Cap at maximum instead of failing
+            volume = max_volume
+        
+        # Round to 2 decimal places for MT5 compatibility
+        volume = round(volume, 2)
+        
+        # Ensure minimum step compliance (most brokers use 0.01 step)
+        volume_steps = round(volume / 0.01) * 0.01
+        volume = round(volume_steps, 2)
         
         return volume
     
@@ -202,6 +227,13 @@ class TradingSystem:
         
         # 📊 Dynamic Lot Sizing Configuration
         self.base_lot_size = 0.01  # lot พื้นฐาน
+        
+        # 🚀 Performance Optimization - Zone Analysis Caching
+        self.zone_analysis_cache = None
+        self.zone_analysis_cache_time = None
+        self.zone_analysis_cache_positions_hash = None
+        self.zone_cache_ttl = 30  # seconds - cache for 30 seconds
+        self.zone_recalc_threshold = 0.1  # recalculate if positions change by 10%
         self.max_lot_size = 0.10   # lot สูงสุด
         self.lot_multiplier_range = (0.5, 3.0)  # ช่วงการคูณ lot
         self.equity_based_sizing = True  # ปรับตาม equity
@@ -1681,18 +1713,54 @@ class TradingSystem:
 
     # 🎯 Zone-Based Trading System Methods
     
-    def analyze_position_zones(self) -> dict:
-        """แบ่ง positions ตาม price zones และวิเคราะห์การกระจาย"""
+    def _get_positions_hash(self) -> str:
+        """Calculate a hash of current positions for cache invalidation"""
         try:
             if not self.positions:
-                return {
+                return "empty"
+            
+            # Create a simple hash based on position count, total volume, and key prices
+            position_data = []
+            for pos in self.positions:
+                position_data.append(f"{pos.ticket}:{pos.open_price}:{pos.volume}:{pos.type}")
+            
+            position_string = "|".join(sorted(position_data))
+            import hashlib
+            return hashlib.md5(position_string.encode()).hexdigest()[:8]
+        except Exception:
+            return str(len(self.positions) if self.positions else 0)
+
+    def analyze_position_zones(self) -> dict:
+        """แบ่ง positions ตาม price zones และวิเคราะห์การกระจาย - with caching"""
+        try:
+            # Check cache validity first
+            current_time = datetime.now()
+            current_positions_hash = self._get_positions_hash()
+            
+            if (self.zone_analysis_cache and 
+                self.zone_analysis_cache_time and 
+                self.zone_analysis_cache_positions_hash == current_positions_hash and
+                (current_time - self.zone_analysis_cache_time).seconds < self.zone_cache_ttl):
+                # Return cached result with flag
+                cached_result = self.zone_analysis_cache.copy()
+                cached_result['cached'] = True
+                return cached_result
+            
+            if not self.positions:
+                empty_result = {
                     'zones': {}, 
                     'distribution_score': 100.0, 
                     'clustered_zones': [], 
                     'empty_zones': [],
                     'total_zones_used': 0,
-                    'current_price': 0.0
+                    'current_price': 0.0,
+                    'cached': False
                 }
+                # Cache empty result too
+                self.zone_analysis_cache = empty_result
+                self.zone_analysis_cache_time = current_time
+                self.zone_analysis_cache_positions_hash = current_positions_hash
+                return empty_result
             
             # Get current market price for reference
             current_price = 0
@@ -1746,18 +1814,26 @@ class TradingSystem:
             clustered_zones = self.get_congested_zones(zones)
             empty_zones = self.get_empty_zones(zones, current_price)
             
-            return {
+            result = {
                 'zones': zones,
                 'distribution_score': distribution_score,
                 'clustered_zones': clustered_zones,
                 'empty_zones': empty_zones,
                 'total_zones_used': len(zones),
-                'current_price': current_price
+                'current_price': current_price,
+                'cached': False
             }
+            
+            # Cache the result
+            self.zone_analysis_cache = result
+            self.zone_analysis_cache_time = current_time
+            self.zone_analysis_cache_positions_hash = current_positions_hash
+            
+            return result
             
         except Exception as e:
             self.log(f"Error analyzing position zones: {str(e)}", "ERROR")
-            return {'zones': {}, 'distribution_score': 0.0, 'clustered_zones': [], 'empty_zones': []}
+            return {'zones': {}, 'distribution_score': 0.0, 'clustered_zones': [], 'empty_zones': [], 'cached': False}
 
     def calculate_zone_distribution_score(self, zones: dict) -> float:
         """คำนวณคะแนนการกระจายตัวของ zones (0-100)"""
@@ -2078,7 +2154,8 @@ class TradingSystem:
             # 🎯 Log zone analysis if available
             if 'zone_analysis' in router_result['details'] and router_result['details']['zone_analysis']:
                 zone_data = router_result['details']['zone_analysis']
-                self.log(f"🗺️ Zone Analysis: {zone_data['total_zones_used']} zones, score: {zone_data['distribution_score']:.1f}")
+                cache_status = "📋 CACHED" if zone_data.get('cached', False) else "🔄 CALCULATED"
+                self.log(f"🗺️ Zone Analysis ({cache_status}): {zone_data['total_zones_used']} zones, score: {zone_data['distribution_score']:.1f}")
                 if zone_data['clustered_zones']:
                     self.log(f"   ⚠️ Congested zones: {len(zone_data['clustered_zones'])}")
                 if zone_data['empty_zones']:
@@ -2496,9 +2573,9 @@ class TradingSystem:
                 result['details']['reason'] = 'Signal skipped for portfolio protection'
                 return result
             
-            # 6. Final zone distribution check
-            if zone_analysis['distribution_score'] < 30:  # Poor distribution
-                self.log(f"⚠️ Poor zone distribution (score: {zone_analysis['distribution_score']:.1f})")
+            # 6. Final zone distribution check (relaxed threshold)
+            if zone_analysis['distribution_score'] < 20:  # Only skip if very poor distribution (was 30)
+                self.log(f"⚠️ Very poor zone distribution (score: {zone_analysis['distribution_score']:.1f}) - allowing signal")
                 result['details']['reason'] += ' - Poor zone distribution warning'
             
             return result
@@ -2776,31 +2853,34 @@ class TradingSystem:
             return current_buy_ratio
 
     def should_skip_signal(self, signal: Signal, buy_ratio: float) -> bool:
-        """ตรวจสอบว่าควร skip signal หรือไม่"""
+        """ตรวจสอบว่าควร skip signal หรือไม่ - optimized for better signal acceptance"""
         try:
-            # Skip ถ้า balance เอียงมากและไม่มีตัวเลือกที่ดีให้ redirect
-            if signal.direction == 'BUY' and buy_ratio > 0.8:
+            # Relaxed skip conditions - only skip in truly extreme cases
+            # Changed from 0.8/0.2 to 0.85/0.15 to allow more signals through
+            if signal.direction == 'BUY' and buy_ratio > 0.85:
                 sell_positions = [p for p in self.positions if p.type == "SELL"]
                 profitable_sells = [p for p in sell_positions if p.profit_per_lot > self.min_profit_for_redirect_close]
                 if not profitable_sells:
                     self.log(f"⏭️ Skipping BUY signal - extreme imbalance and no profitable SELLs")
                     return True
             
-            elif signal.direction == 'SELL' and buy_ratio < 0.2:
+            elif signal.direction == 'SELL' and buy_ratio < 0.15:
                 buy_positions = [p for p in self.positions if p.type == "BUY"]
                 profitable_buys = [p for p in buy_positions if p.profit_per_lot > self.min_profit_for_redirect_close]
                 if not profitable_buys:
                     self.log(f"⏭️ Skipping SELL signal - extreme imbalance and no profitable BUYs")
                     return True
             
-            # Skip ถ้า position เยอะเกินไปและ margin ต่ำ
-            if len(self.positions) > self.max_positions * 0.9:
-                account_info = mt5.account_info()
-                if account_info and account_info.margin > 0:
-                    margin_level = (account_info.equity / account_info.margin) * 100
-                    if margin_level < self.min_margin_level * 1.5:
-                        self.log(f"⏭️ Skipping signal - high position count and low margin")
-                        return True
+            # Relaxed position count and margin check - only skip if really critical
+            # Changed from 0.9 to 0.95 and margin level from 1.5 to 1.2
+            if len(self.positions) > self.max_positions * 0.95:
+                if MT5_AVAILABLE and mt5 and self.mt5_connected:
+                    account_info = mt5.account_info()
+                    if account_info and account_info.margin > 0:
+                        margin_level = (account_info.equity / account_info.margin) * 100
+                        if margin_level < self.min_margin_level * 1.2:
+                            self.log(f"⏭️ Skipping signal - critical position count and low margin (ML: {margin_level:.1f})")
+                            return True
             
             return False
             
@@ -2876,7 +2956,7 @@ class TradingSystem:
             
             if (ticket not in self.position_tracker) and (str(ticket) not in self.position_tracker):
                 self.position_tracker[ticket] = {
-                    'birth_time': datetime.now(),
+                    'birth_time': datetime.now().isoformat(),
                     'initial_price': position.open_price,
                     'max_profit': position.profit,
                     'min_profit': position.profit,
@@ -4555,10 +4635,10 @@ class TradingSystem:
                 "version": "3.1",  # Updated version for robustness
                 "checksum": None,  # Will be calculated
                 
-                # Position tracking (with validation)
-                "position_tracker": self.position_tracker if isinstance(self.position_tracker, dict) else {},
-                "active_hedges": self.active_hedges if isinstance(self.active_hedges, dict) else {},
-                "hedge_pairs": self.hedge_pairs if isinstance(self.hedge_pairs, dict) else {},
+                # Position tracking (with validation and datetime serialization)
+                "position_tracker": serialize_datetime_dict(self.position_tracker if isinstance(self.position_tracker, dict) else {}),
+                "active_hedges": serialize_datetime_dict(self.active_hedges if isinstance(self.active_hedges, dict) else {}),
+                "hedge_pairs": serialize_datetime_dict(self.hedge_pairs if isinstance(self.hedge_pairs, dict) else {}),
                 
                 # Statistics (with defaults)
                 "total_signals": getattr(self, 'total_signals', 0),
@@ -4579,7 +4659,7 @@ class TradingSystem:
                 "group_profit_captured": getattr(self, 'group_profit_captured', 0.0),
                 
                 # Hedge analytics
-                "hedge_analytics": getattr(self, 'hedge_analytics', {}),
+                "hedge_analytics": serialize_datetime_dict(getattr(self, 'hedge_analytics', {})),
                 
                 # Portfolio info
                 "portfolio_health": getattr(self, 'portfolio_health', 100.0),
