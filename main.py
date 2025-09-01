@@ -535,6 +535,14 @@ class TradingSystem:
             'cache_hits': 0,
             'average_response_time': 0.0
         }
+        
+        # Configure logging level based on detailed_logging setting
+        if self.config["order_execution"]["detailed_logging"]:
+            logging.getLogger().setLevel(logging.DEBUG)
+            logger.setLevel(logging.DEBUG)
+        else:
+            logging.getLogger().setLevel(logging.INFO)
+            logger.setLevel(logging.INFO)
 
     def log_symbol_operation_status(self):
         """Log comprehensive symbol operation status"""
@@ -609,6 +617,10 @@ class TradingSystem:
             logger.error(message)
         elif level == "WARNING":
             logger.warning(message)
+        elif level == "DEBUG":
+            # Only log DEBUG messages if detailed logging is enabled
+            if self.config["order_execution"]["detailed_logging"]:
+                logger.debug(message)
         else:
             logger.info(message)
 
@@ -8641,6 +8653,25 @@ class TradingSystem:
         use_exponential_backoff = self.config["order_execution"]["exponential_backoff"]
         detailed_logging = self.config["order_execution"]["detailed_logging"]
         
+        # Initial debug logging
+        if detailed_logging:
+            self.log("🔍 DEBUG: Starting Order Execution Process", "DEBUG")
+            symbol = request.get('symbol', 'Unknown')
+            volume = request.get('volume', 'Unknown')
+            order_type = request.get('type', 'Unknown')
+            price = request.get('price', 'Unknown')
+            
+            # Decode order type for readability
+            type_name = "UNKNOWN"
+            if hasattr(mt5, 'ORDER_TYPE_BUY') and order_type == mt5.ORDER_TYPE_BUY:
+                type_name = "BUY"
+            elif hasattr(mt5, 'ORDER_TYPE_SELL') and order_type == mt5.ORDER_TYPE_SELL:
+                type_name = "SELL"
+            
+            self.log(f"   📤 Order Summary: {type_name} {volume} {symbol} @ {price}", "DEBUG")
+            self.log(f"   🔄 Max Retry Attempts: {max_attempts}", "DEBUG")
+            self.log(f"   ⏱️ Backoff Strategy: {'Exponential' if use_exponential_backoff else 'Linear'}", "DEBUG")
+        
         for attempt in range(max_attempts):
             attempt_start = time.time()
             
@@ -8653,18 +8684,125 @@ class TradingSystem:
                     # Enhanced error handling for None responses
                     self.log(f"❌ Order send returned None (attempt {attempt + 1}/{max_attempts}) - took {execution_time:.1f}ms", "WARNING")
                     
-                    # Log additional context for debugging
+                    # Comprehensive debug logging for None responses
                     if detailed_logging:
-                        self.log(f"   Request details: Symbol={request.get('symbol', 'N/A')}, "
-                                f"Volume={request.get('volume', 'N/A')}, "
-                                f"Type={request.get('type', 'N/A')}, "
-                                f"Price={request.get('price', 'N/A')}", "DEBUG")
+                        # Log complete order request details
+                        self.log("🔍 DEBUG: Complete Order Request Details:", "DEBUG")
+                        for key, value in request.items():
+                            if key == 'type':
+                                # Decode order type for readability
+                                type_name = "UNKNOWN"
+                                if hasattr(mt5, 'ORDER_TYPE_BUY') and value == mt5.ORDER_TYPE_BUY:
+                                    type_name = "ORDER_TYPE_BUY"
+                                elif hasattr(mt5, 'ORDER_TYPE_SELL') and value == mt5.ORDER_TYPE_SELL:
+                                    type_name = "ORDER_TYPE_SELL"
+                                self.log(f"   {key}: {value} ({type_name})", "DEBUG")
+                            elif key == 'type_filling':
+                                # Decode filling type for readability
+                                filling_name = "UNKNOWN"
+                                if hasattr(mt5, 'ORDER_FILLING_IOC') and value == mt5.ORDER_FILLING_IOC:
+                                    filling_name = "ORDER_FILLING_IOC"
+                                elif hasattr(mt5, 'ORDER_FILLING_FOK') and value == mt5.ORDER_FILLING_FOK:
+                                    filling_name = "ORDER_FILLING_FOK"
+                                elif hasattr(mt5, 'ORDER_FILLING_RETURN') and value == mt5.ORDER_FILLING_RETURN:
+                                    filling_name = "ORDER_FILLING_RETURN"
+                                self.log(f"   {key}: {value} ({filling_name})", "DEBUG")
+                            elif key == 'type_time':
+                                # Decode time type for readability
+                                time_name = "UNKNOWN"
+                                if hasattr(mt5, 'ORDER_TIME_GTC') and value == mt5.ORDER_TIME_GTC:
+                                    time_name = "ORDER_TIME_GTC"
+                                elif hasattr(mt5, 'ORDER_TIME_DAY') and value == mt5.ORDER_TIME_DAY:
+                                    time_name = "ORDER_TIME_DAY"
+                                self.log(f"   {key}: {value} ({time_name})", "DEBUG")
+                            else:
+                                self.log(f"   {key}: {value}", "DEBUG")
                         
-                        # Check MT5 connection status
-                        if not self.check_mt5_connection_health():
-                            self.log("   MT5 connection appears unhealthy", "WARNING")
+                        # Log MT5 connection and account status
+                        self.log("🔍 DEBUG: MT5 Connection & Account Status:", "DEBUG")
+                        try:
+                            # Check MT5 connection health
+                            connection_healthy = self.check_mt5_connection_health()
+                            self.log(f"   Connection Health: {'✅ HEALTHY' if connection_healthy else '❌ UNHEALTHY'}", "DEBUG")
+                            
+                            # Get account information
+                            if MT5_AVAILABLE and mt5:
+                                account_info = mt5.account_info()
+                                if account_info:
+                                    self.log(f"   Account Login: {account_info.login}", "DEBUG")
+                                    self.log(f"   Account Server: {account_info.server}", "DEBUG")
+                                    self.log(f"   Account Balance: ${account_info.balance:.2f}", "DEBUG")
+                                    self.log(f"   Account Equity: ${account_info.equity:.2f}", "DEBUG")
+                                    self.log(f"   Account Margin: ${account_info.margin:.2f}", "DEBUG")
+                                    self.log(f"   Account Free Margin: ${account_info.margin_free:.2f}", "DEBUG")
+                                    self.log(f"   Trade Allowed: {account_info.trade_allowed}", "DEBUG")
+                                    self.log(f"   Expert Advisors Allowed: {account_info.trade_expert}", "DEBUG")
+                                    if hasattr(account_info, 'margin_level'):
+                                        self.log(f"   Margin Level: {account_info.margin_level:.2f}%", "DEBUG")
+                                else:
+                                    self.log("   ❌ Failed to retrieve account information", "DEBUG")
+                                
+                                # Get terminal information
+                                terminal_info = mt5.terminal_info()
+                                if terminal_info:
+                                    self.log(f"   Terminal Connected: {terminal_info.connected}", "DEBUG")
+                                    self.log(f"   Terminal Trade Allowed: {terminal_info.trade_allowed}", "DEBUG")
+                                    if hasattr(terminal_info, 'build'):
+                                        self.log(f"   Terminal Build: {terminal_info.build}", "DEBUG")
+                                else:
+                                    self.log("   ❌ Failed to retrieve terminal information", "DEBUG")
+                                
+                                # Get symbol information for the requested symbol
+                                symbol = request.get('symbol', 'Unknown')
+                                symbol_info = mt5.symbol_info(symbol)
+                                if symbol_info:
+                                    self.log(f"   Symbol '{symbol}' Status:", "DEBUG")
+                                    self.log(f"     Visible: {symbol_info.visible}", "DEBUG")
+                                    self.log(f"     Spread: {symbol_info.spread}", "DEBUG")
+                                    self.log(f"     Trade Mode: {symbol_info.trade_mode}", "DEBUG")
+                                    if hasattr(symbol_info, 'trade_execution'):
+                                        self.log(f"     Trade Execution: {symbol_info.trade_execution}", "DEBUG")
+                                    if hasattr(symbol_info, 'filling_mode'):
+                                        self.log(f"     Filling Mode: {symbol_info.filling_mode}", "DEBUG")
+                                    self.log(f"     Volume Min: {symbol_info.volume_min}", "DEBUG")
+                                    self.log(f"     Volume Max: {symbol_info.volume_max}", "DEBUG")
+                                    self.log(f"     Volume Step: {symbol_info.volume_step}", "DEBUG")
+                                else:
+                                    self.log(f"   ❌ Failed to retrieve symbol information for '{symbol}'", "DEBUG")
+                                
+                                # Get current tick data
+                                tick = mt5.symbol_info_tick(symbol)
+                                if tick:
+                                    self.log(f"   Current Tick Data for '{symbol}':", "DEBUG")
+                                    self.log(f"     Bid: {tick.bid:.5f}", "DEBUG")
+                                    self.log(f"     Ask: {tick.ask:.5f}", "DEBUG")
+                                    self.log(f"     Last: {tick.last:.5f}", "DEBUG")
+                                    self.log(f"     Time: {datetime.fromtimestamp(tick.time)}", "DEBUG")
+                                else:
+                                    self.log(f"   ❌ Failed to retrieve tick data for '{symbol}'", "DEBUG")
+                                
+                                # Check for any MT5 errors
+                                last_error = mt5.last_error()
+                                if last_error[0] != 0:  # 0 means no error
+                                    self.log(f"   ⚠️ MT5 Last Error: Code {last_error[0]} - {last_error[1]}", "DEBUG")
+                                else:
+                                    self.log("   ✅ No MT5 errors detected", "DEBUG")
+                            else:
+                                self.log("   ❌ MT5 not available or not connected", "DEBUG")
+                                
+                        except Exception as e:
+                            self.log(f"   ❌ Error collecting debug information: {str(e)}", "DEBUG")
+                        
+                        # Analysis and recommendations
+                        self.log("🔍 DEBUG: Analysis & Recommendations:", "DEBUG")
+                        if not connection_healthy:
+                            self.log("   💡 Recommendation: MT5 connection issue detected - check connection", "DEBUG")
                         else:
-                            self.log("   MT5 connection appears healthy - None response likely due to broker rejection", "INFO")
+                            self.log("   💡 Analysis: MT5 connection healthy - None response likely due to:", "DEBUG")
+                            self.log("     - Broker rejection (insufficient margin, invalid parameters)", "DEBUG")
+                            self.log("     - Market conditions (spread too wide, off-market hours)", "DEBUG")
+                            self.log("     - Symbol-specific restrictions", "DEBUG")
+                            self.log("     - Order parameters validation failure at broker level", "DEBUG")
                     
                     if attempt < max_attempts - 1:
                         # Use conservative backoff for None returns
@@ -8701,6 +8839,28 @@ class TradingSystem:
                 if result.retcode in retriable_errors:
                     error_desc = self._get_trade_error_description(result.retcode)
                     self.log(f"🔄 Transient error: {error_desc} (code: {result.retcode}) - attempt {attempt + 1}, took {execution_time:.1f}ms", "WARNING")
+                    
+                    # Enhanced debug logging for retriable errors
+                    if detailed_logging:
+                        self.log("🔍 DEBUG: Retriable Error Response Details:", "DEBUG")
+                        self.log(f"   Return Code: {result.retcode}", "DEBUG")
+                        self.log(f"   Error Description: {error_desc}", "DEBUG")
+                        if hasattr(result, 'comment'):
+                            self.log(f"   Broker Comment: {result.comment}", "DEBUG")
+                        if hasattr(result, 'request_id'):
+                            self.log(f"   Request ID: {result.request_id}", "DEBUG")
+                        
+                        # Specific analysis for different error types
+                        if result.retcode == mt5.TRADE_RETCODE_REQUOTE:
+                            self.log("   💡 Analysis: Broker requested new price quote", "DEBUG")
+                        elif result.retcode == mt5.TRADE_RETCODE_PRICE_CHANGED:
+                            self.log("   💡 Analysis: Price moved during order processing", "DEBUG")
+                        elif result.retcode == mt5.TRADE_RETCODE_PRICE_OFF:
+                            self.log("   💡 Analysis: Off quotes - market may be volatile or closed", "DEBUG")
+                        elif result.retcode == mt5.TRADE_RETCODE_TIMEOUT:
+                            self.log("   💡 Analysis: Request timeout - network or broker processing delay", "DEBUG")
+                        elif result.retcode == mt5.TRADE_RETCODE_CONNECTION:
+                            self.log("   💡 Analysis: Connection issue detected", "DEBUG")
                     
                     if attempt < max_attempts - 1:
                         # Check connection health only for connection-specific errors
@@ -8746,17 +8906,84 @@ class TradingSystem:
                 # Log execution details for successful or non-retriable results
                 total_time = (time.time() - start_time) * 1000
                 if result.retcode == mt5.TRADE_RETCODE_DONE:
+                    self.log(f"✅ Order executed successfully - attempt {attempt + 1}, took {execution_time:.1f}ms (total: {total_time:.1f}ms)", "INFO")
+                    
+                    # Enhanced success logging for debugging
                     if detailed_logging:
-                        self.log(f"✅ Order executed successfully - attempt {attempt + 1}, took {execution_time:.1f}ms (total: {total_time:.1f}ms)", "DEBUG")
+                        self.log("🔍 DEBUG: Successful Order Response Details:", "DEBUG")
+                        self.log(f"   Order Ticket: {result.order}", "DEBUG")
+                        if hasattr(result, 'deal'):
+                            self.log(f"   Deal Ticket: {result.deal}", "DEBUG")
+                        if hasattr(result, 'volume'):
+                            self.log(f"   Executed Volume: {result.volume}", "DEBUG")
+                        if hasattr(result, 'price'):
+                            self.log(f"   Execution Price: {result.price:.5f}", "DEBUG")
+                        if hasattr(result, 'comment'):
+                            self.log(f"   Broker Comment: {result.comment}", "DEBUG")
+                        if hasattr(result, 'request_id'):
+                            self.log(f"   Request ID: {result.request_id}", "DEBUG")
+                        self.log(f"   Return Code: {result.retcode} (TRADE_RETCODE_DONE)", "DEBUG")
                 else:
                     error_desc = self._get_trade_error_description(result.retcode)
                     self.log(f"❌ Order failed with non-retriable error: {error_desc} (code: {result.retcode}) - took {execution_time:.1f}ms", "ERROR")
+                    
+                    # Enhanced error logging for debugging
+                    if detailed_logging:
+                        self.log("🔍 DEBUG: Failed Order Response Details:", "DEBUG")
+                        self.log(f"   Return Code: {result.retcode}", "DEBUG")
+                        self.log(f"   Error Description: {error_desc}", "DEBUG")
+                        if hasattr(result, 'comment'):
+                            self.log(f"   Broker Comment: {result.comment}", "DEBUG")
+                        if hasattr(result, 'request_id'):
+                            self.log(f"   Request ID: {result.request_id}", "DEBUG")
+                        if hasattr(result, 'volume'):
+                            self.log(f"   Requested Volume: {result.volume}", "DEBUG")
+                        if hasattr(result, 'price'):
+                            self.log(f"   Requested Price: {result.price:.5f}", "DEBUG")
+                        
+                        # Additional context for specific error types
+                        if result.retcode == mt5.TRADE_RETCODE_INVALID_FILL:
+                            self.log("   💡 Analysis: Invalid filling type - broker doesn't support the specified filling mode", "DEBUG")
+                        elif result.retcode == mt5.TRADE_RETCODE_INVALID_VOLUME:
+                            self.log("   💡 Analysis: Invalid volume - check symbol's volume limits", "DEBUG")
+                        elif result.retcode == mt5.TRADE_RETCODE_INVALID_PRICE:
+                            self.log("   💡 Analysis: Invalid price - price may be too far from market", "DEBUG")
+                        elif result.retcode == mt5.TRADE_RETCODE_NO_MONEY:
+                            self.log("   💡 Analysis: Insufficient funds - check account balance and margin", "DEBUG")
+                        elif result.retcode == mt5.TRADE_RETCODE_TRADE_DISABLED:
+                            self.log("   💡 Analysis: Trading disabled - check account permissions and market hours", "DEBUG")
+                        elif result.retcode == mt5.TRADE_RETCODE_MARKET_CLOSED:
+                            self.log("   💡 Analysis: Market closed - check trading session times", "DEBUG")
                 
                 return result
                 
             except Exception as e:
                 execution_time = (time.time() - attempt_start) * 1000
                 self.log(f"❌ Exception during order execution (attempt {attempt + 1}): {str(e)} - took {execution_time:.1f}ms", "ERROR")
+                
+                # Enhanced exception logging for debugging
+                if detailed_logging:
+                    self.log("🔍 DEBUG: Exception Details:", "DEBUG")
+                    self.log(f"   Exception Type: {type(e).__name__}", "DEBUG")
+                    self.log(f"   Exception Message: {str(e)}", "DEBUG")
+                    
+                    # Check if MT5 is still available after exception
+                    try:
+                        if MT5_AVAILABLE and mt5:
+                            last_error = mt5.last_error()
+                            if last_error[0] != 0:
+                                self.log(f"   MT5 Last Error: Code {last_error[0]} - {last_error[1]}", "DEBUG")
+                            
+                            # Quick connection test
+                            account_info = mt5.account_info()
+                            if account_info:
+                                self.log("   MT5 connection still active", "DEBUG")
+                            else:
+                                self.log("   ❌ MT5 connection lost", "DEBUG")
+                        else:
+                            self.log("   ❌ MT5 not available", "DEBUG")
+                    except Exception as nested_e:
+                        self.log(f"   ❌ Error checking MT5 status: {str(nested_e)}", "DEBUG")
                 
                 if attempt < max_attempts - 1:
                     # Use conservative backoff for exceptions
