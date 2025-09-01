@@ -81,6 +81,159 @@ class ValidationError(Exception):
     """Custom validation error"""
     pass
 
+class OrderRateLimiter:
+    """Rate limiting system to prevent rapid order execution"""
+    
+    def __init__(self, max_orders_per_minute: int = 5, max_orders_per_hour: int = 50, min_order_interval: int = 10):
+        self.max_orders_per_minute = max_orders_per_minute
+        self.max_orders_per_hour = max_orders_per_hour
+        self.min_order_interval = min_order_interval  # seconds
+        self.order_timestamps = []  # List to track order timestamps
+        self.last_order_time = None
+        
+    def can_place_order(self) -> bool:
+        """Check if an order can be placed based on rate limiting rules"""
+        now = datetime.now()
+        
+        # Clean old timestamps (remove those older than 1 hour)
+        cutoff_time = now - timedelta(hours=1)
+        self.order_timestamps = [ts for ts in self.order_timestamps if ts > cutoff_time]
+        
+        # Check minimum interval since last order
+        if self.last_order_time:
+            time_since_last = (now - self.last_order_time).total_seconds()
+            if time_since_last < self.min_order_interval:
+                return False
+        
+        # Check orders per minute
+        minute_cutoff = now - timedelta(minutes=1)
+        recent_orders = [ts for ts in self.order_timestamps if ts > minute_cutoff]
+        if len(recent_orders) >= self.max_orders_per_minute:
+            return False
+        
+        # Check orders per hour
+        if len(self.order_timestamps) >= self.max_orders_per_hour:
+            return False
+            
+        return True
+    
+    def record_order(self):
+        """Record that an order was placed"""
+        now = datetime.now()
+        self.order_timestamps.append(now)
+        self.last_order_time = now
+    
+    def get_next_allowed_time(self) -> datetime:
+        """Calculate the next time an order can be placed"""
+        now = datetime.now()
+        next_allowed = now
+        
+        # Check minimum interval constraint
+        if self.last_order_time:
+            next_from_interval = self.last_order_time + timedelta(seconds=self.min_order_interval)
+            if next_from_interval > next_allowed:
+                next_allowed = next_from_interval
+        
+        # Check per-minute constraint
+        minute_cutoff = now - timedelta(minutes=1)
+        recent_orders = [ts for ts in self.order_timestamps if ts > minute_cutoff]
+        if len(recent_orders) >= self.max_orders_per_minute and recent_orders:
+            oldest_in_minute = min(recent_orders)
+            next_from_minute = oldest_in_minute + timedelta(minutes=1)
+            if next_from_minute > next_allowed:
+                next_allowed = next_from_minute
+        
+        return next_allowed
+    
+    def get_status(self) -> dict:
+        """Get current rate limiting status"""
+        now = datetime.now()
+        minute_cutoff = now - timedelta(minutes=1)
+        recent_orders = [ts for ts in self.order_timestamps if ts > minute_cutoff]
+        
+        return {
+            "orders_this_minute": len(recent_orders),
+            "orders_this_hour": len(self.order_timestamps),
+            "max_per_minute": self.max_orders_per_minute,
+            "max_per_hour": self.max_orders_per_hour,
+            "can_place_order": self.can_place_order(),
+            "next_allowed_time": self.get_next_allowed_time()
+        }
+
+class TradingCircuitBreaker:
+    """Circuit breaker system to prevent trading during consecutive failures"""
+    
+    def __init__(self, failure_threshold: int = 5, recovery_timeout: int = 300, health_check_interval: int = 60):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout  # seconds
+        self.health_check_interval = health_check_interval  # seconds
+        
+        self.failure_count = 0
+        self.state = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
+        self.last_failure_time = None
+        self.last_success_time = None
+        self.last_health_check = None
+        
+    def can_execute_trade(self) -> bool:
+        """Check if trading is allowed based on circuit breaker state"""
+        now = datetime.now()
+        
+        if self.state == "CLOSED":
+            return True
+        elif self.state == "OPEN":
+            # Check if recovery timeout has passed
+            if self.last_failure_time:
+                time_since_failure = (now - self.last_failure_time).total_seconds()
+                if time_since_failure >= self.recovery_timeout:
+                    self.state = "HALF_OPEN"
+                    return True
+            return False
+        elif self.state == "HALF_OPEN":
+            return True
+        
+        return False
+    
+    def record_success(self):
+        """Record a successful trade execution"""
+        self.last_success_time = datetime.now()
+        if self.state == "HALF_OPEN":
+            # Successful trade in HALF_OPEN state, reset to CLOSED
+            self.state = "CLOSED"
+            self.failure_count = 0
+    
+    def record_failure(self):
+        """Record a failed trade execution"""
+        self.failure_count += 1
+        self.last_failure_time = datetime.now()
+        
+        if self.failure_count >= self.failure_threshold:
+            self.state = "OPEN"
+    
+    def reset(self):
+        """Manually reset the circuit breaker"""
+        self.state = "CLOSED"
+        self.failure_count = 0
+        self.last_failure_time = None
+    
+    def get_status(self) -> dict:
+        """Get current circuit breaker status"""
+        now = datetime.now()
+        
+        time_until_recovery = None
+        if self.state == "OPEN" and self.last_failure_time:
+            time_since_failure = (now - self.last_failure_time).total_seconds()
+            time_until_recovery = max(0, self.recovery_timeout - time_since_failure)
+        
+        return {
+            "state": self.state,
+            "failure_count": self.failure_count,
+            "threshold": self.failure_threshold,
+            "can_execute": self.can_execute_trade(),
+            "time_until_recovery": time_until_recovery,
+            "last_failure": self.last_failure_time,
+            "last_success": self.last_success_time
+        }
+
 class InputValidator:
     """Input validation utility class"""
     
@@ -266,6 +419,25 @@ class TradingSystem:
                 "magic_number": 234000,  # Simple magic number for all orders
                 "type_filling_fallback": "IOC",  # Options: "IOC", "RETURN", "FOK", "auto"
                 "max_filling_attempts": 3  # Maximum ORDER_FILLING types to try
+            },
+            "order_protection": {
+                "rate_limiting": {
+                    "enabled": True,
+                    "max_orders_per_minute": 5,
+                    "max_orders_per_hour": 50,
+                    "min_order_interval": 10  # seconds
+                },
+                "circuit_breaker": {
+                    "enabled": True,
+                    "failure_threshold": 5,
+                    "recovery_timeout": 300,  # seconds
+                    "health_check_interval": 60
+                },
+                "validation": {
+                    "connection_health_check": True,
+                    "signal_confidence_threshold": 0.7,
+                    "market_hours_check": True
+                }
             }
         }
         
@@ -524,6 +696,34 @@ class TradingSystem:
         self.last_symbol_scan = None  # Timestamp of last broker symbol scan
         self.symbol_scan_interval = self.config["symbol_management"]["auto_detection_scan_interval"]
         self.xauusd_pattern_variations = self.config["symbol_management"]["auto_detection_patterns"]
+        
+        # 🛡️ Order Protection System - Rate Limiting & Circuit Breaker
+        protection_config = self.config["order_protection"]
+        
+        # Initialize rate limiter
+        if protection_config["rate_limiting"]["enabled"]:
+            rate_config = protection_config["rate_limiting"]
+            self.rate_limiter = OrderRateLimiter(
+                max_orders_per_minute=rate_config["max_orders_per_minute"],
+                max_orders_per_hour=rate_config["max_orders_per_hour"],
+                min_order_interval=rate_config["min_order_interval"]
+            )
+        else:
+            self.rate_limiter = None
+            
+        # Initialize circuit breaker
+        if protection_config["circuit_breaker"]["enabled"]:
+            cb_config = protection_config["circuit_breaker"]
+            self.circuit_breaker = TradingCircuitBreaker(
+                failure_threshold=cb_config["failure_threshold"],
+                recovery_timeout=cb_config["recovery_timeout"],
+                health_check_interval=cb_config["health_check_interval"]
+            )
+        else:
+            self.circuit_breaker = None
+            
+        # Store validation config for easy access
+        self.validation_config = protection_config["validation"]
         
         # Enhanced retry configuration
         self.symbol_retry_attempts = self.config["symbol_management"]["retry_attempts"]
@@ -3153,7 +3353,7 @@ class TradingSystem:
             return False
 
     def execute_normal_order_v2(self, signal: Signal, lot_size: float, decision_details: dict) -> bool:
-        """Execute normal order with direct MT5 order sending (v2)"""
+        """Execute normal order with enhanced protection systems (v2)"""
         try:
             # Enhanced lot size validation
             if lot_size <= 0:
@@ -3173,6 +3373,11 @@ class TradingSystem:
             
             if not self.mt5_connected:
                 self.log("MT5 not connected", "ERROR")
+                return False
+            
+            # 🛡️ ENHANCED PROTECTION: Pre-order validation with protection systems
+            if not self._validate_order_prerequisites(signal, lot_size):
+                self.log("🛡️ Order blocked by protection systems", "WARNING")
                 return False
             
             # Use current active symbol
@@ -3215,12 +3420,22 @@ class TradingSystem:
             
             # Check result with enhanced error logging
             if result.retcode == mt5.TRADE_RETCODE_DONE:
+                # 🛡️ PROTECTION: Record successful order
+                if self.rate_limiter:
+                    self.rate_limiter.record_order()
+                if self.circuit_breaker:
+                    self.circuit_breaker.record_success()
+                
                 confidence = decision_details.get('confidence', 0.0)
                 
                 self.log(f"✅ Order executed successfully: {signal.direction} {lot_size:.2f} lots at {price:.5f}")
                 self.log(f"   Ticket: {result.order}, Deal: {getattr(result, 'deal', 'N/A')}, Confidence: {confidence:.1%}")
                 return True
             else:
+                # 🛡️ PROTECTION: Record failed order
+                if self.circuit_breaker:
+                    self.circuit_breaker.record_failure()
+                
                 error_desc = self._get_trade_error_description(result.retcode)
                 self.log(f"❌ Order failed after all ORDER_FILLING attempts: {error_desc} (code: {result.retcode})", "ERROR")
                 self.log(f"   Signal: {signal.direction}, Symbol: {active_symbol}, Lot: {lot_size}, Price: {price}", "ERROR")
@@ -3238,6 +3453,10 @@ class TradingSystem:
                 return False
             
         except Exception as e:
+            # 🛡️ PROTECTION: Record exception as failure
+            if self.circuit_breaker:
+                self.circuit_breaker.record_failure()
+            
             self.log(f"Error executing order v2: {str(e)}", "ERROR")
             return False
             
@@ -3460,8 +3679,112 @@ class TradingSystem:
             self.log(f"Lot size validation error: {str(e)}", "ERROR")
             return self.config["trading_parameters"]["base_lot_size"]
 
+    def _validate_order_prerequisites(self, signal: Signal, lot_size: float) -> bool:
+        """Enhanced pre-order validation with protection systems"""
+        try:
+            # Basic validation
+            if not isinstance(signal, Signal):
+                self.log("❌ Order prerequisite failed: Invalid signal type", "WARNING")
+                return False
+                
+            # Connection health check (if enabled)
+            if self.validation_config["connection_health_check"]:
+                if not self.mt5_connected:
+                    self.log("❌ Order prerequisite failed: MT5 not connected", "WARNING")
+                    return False
+                    
+                # Enhanced connection check
+                if MT5_AVAILABLE:
+                    account_info = mt5.account_info()
+                    if not account_info:
+                        self.log("❌ Order prerequisite failed: Cannot retrieve account info", "WARNING")
+                        return False
+                        
+                    # Check if account can trade
+                    if not account_info.trade_allowed:
+                        self.log("❌ Order prerequisite failed: Trading not allowed on account", "WARNING")
+                        return False
+            
+            # Signal confidence threshold check (if enabled)
+            if self.validation_config["signal_confidence_threshold"] > 0:
+                confidence_threshold = self.validation_config["signal_confidence_threshold"]
+                if hasattr(signal, 'confidence') and signal.confidence < confidence_threshold:
+                    self.log(f"❌ Order prerequisite failed: Signal confidence {signal.confidence:.2f} below threshold {confidence_threshold:.2f}", "WARNING")
+                    return False
+                elif hasattr(signal, 'strength') and signal.strength < confidence_threshold * 5:  # Scale strength to confidence
+                    self.log(f"❌ Order prerequisite failed: Signal strength {signal.strength:.2f} below threshold {confidence_threshold * 5:.2f}", "WARNING")
+                    return False
+            
+            # Market hours check (if enabled)
+            if self.validation_config["market_hours_check"]:
+                current_time = datetime.now()
+                weekday = current_time.weekday()
+                hour = current_time.hour
+                
+                # Basic market hours check (Monday-Friday, avoid major off-hours)
+                if weekday >= 5:  # Saturday or Sunday
+                    self.log("❌ Order prerequisite failed: Weekend - market likely closed", "WARNING")
+                    return False
+                elif weekday == 0 and hour < 1:  # Monday before 1 AM
+                    self.log("❌ Order prerequisite failed: Monday early hours - market opening", "WARNING")
+                    return False
+                elif weekday == 4 and hour >= 23:  # Friday after 11 PM
+                    self.log("❌ Order prerequisite failed: Friday late hours - market closing", "WARNING")
+                    return False
+            
+            # Rate limiting check
+            if self.rate_limiter and not self.rate_limiter.can_place_order():
+                status = self.rate_limiter.get_status()
+                next_allowed = self.rate_limiter.get_next_allowed_time()
+                self.log(f"❌ Order prerequisite failed: Rate limit exceeded", "WARNING")
+                self.log(f"   Orders this minute: {status['orders_this_minute']}/{status['max_per_minute']}", "INFO")
+                self.log(f"   Orders this hour: {status['orders_this_hour']}/{status['max_per_hour']}", "INFO")
+                self.log(f"   Next allowed time: {next_allowed.strftime('%H:%M:%S')}", "INFO")
+                return False
+            
+            # Circuit breaker check
+            if self.circuit_breaker and not self.circuit_breaker.can_execute_trade():
+                status = self.circuit_breaker.get_status()
+                self.log(f"❌ Order prerequisite failed: Circuit breaker is {status['state']}", "WARNING")
+                self.log(f"   Failure count: {status['failure_count']}/{status['threshold']}", "INFO")
+                if status['time_until_recovery']:
+                    self.log(f"   Recovery in: {status['time_until_recovery']:.0f} seconds", "INFO")
+                return False
+            
+            # Volume validation
+            if lot_size <= 0:
+                self.log(f"❌ Order prerequisite failed: Invalid lot size {lot_size}", "WARNING")
+                return False
+                
+            if lot_size < 0.01:
+                self.log(f"❌ Order prerequisite failed: Lot size {lot_size} below minimum 0.01", "WARNING")
+                return False
+            
+            # Symbol validation (enhanced)
+            if MT5_AVAILABLE:
+                symbol_info = mt5.symbol_info(self.current_symbol)
+                if not symbol_info:
+                    self.log(f"❌ Order prerequisite failed: Symbol {self.current_symbol} not available", "WARNING")
+                    return False
+                    
+                if not symbol_info.visible:
+                    self.log(f"❌ Order prerequisite failed: Symbol {self.current_symbol} not in Market Watch", "WARNING")
+                    return False
+                    
+                # Check symbol trading session
+                if not symbol_info.trade_mode == mt5.SYMBOL_TRADE_MODE_FULL:
+                    self.log(f"❌ Order prerequisite failed: Symbol {self.current_symbol} trading restricted", "WARNING")
+                    return False
+            
+            self.log("✅ Order prerequisites validation passed", "DEBUG")
+            return True
+            
+        except Exception as e:
+            self.log(f"❌ Error in order prerequisites validation: {str(e)}", "ERROR")
+            return False
+
     def execute_normal_order(self, signal: Signal) -> bool:
-        """Execute normal market order with direct MT5 order sending"""
+        """Execute normal market order with enhanced protection systems"""
         try:
             # Basic input validation
             if not isinstance(signal, Signal):
@@ -3489,6 +3812,11 @@ class TradingSystem:
             if validated_lot_size != lot_size:
                 self.log(f"📊 Lot size adjusted during validation: {lot_size} → {validated_lot_size}", "INFO")
                 lot_size = validated_lot_size
+            
+            # 🛡️ ENHANCED PROTECTION: Pre-order validation with protection systems
+            if not self._validate_order_prerequisites(signal, lot_size):
+                self.log("🛡️ Order blocked by protection systems", "WARNING")
+                return False
             
             # Determine order type
             if signal.direction not in ['BUY', 'SELL']:
@@ -3532,6 +3860,12 @@ class TradingSystem:
             
             # Check result with enhanced error logging
             if result.retcode == mt5.TRADE_RETCODE_DONE:
+                # 🛡️ PROTECTION: Record successful order
+                if self.rate_limiter:
+                    self.rate_limiter.record_order()
+                if self.circuit_breaker:
+                    self.circuit_breaker.record_success()
+                
                 self.total_signals += 1
                 self.last_signal_time = datetime.now()
                 self.hourly_signals.append(datetime.now())
@@ -3540,6 +3874,10 @@ class TradingSystem:
                 self.log(f"   Ticket: {result.order}, Deal: {getattr(result, 'deal', 'N/A')}")
                 return True
             else:
+                # 🛡️ PROTECTION: Record failed order
+                if self.circuit_breaker:
+                    self.circuit_breaker.record_failure()
+                
                 error_desc = self._get_trade_error_description(result.retcode)
                 self.log(f"❌ Order failed after all ORDER_FILLING attempts: {error_desc} (code: {result.retcode})", "ERROR")
                 self.log(f"   Signal: {signal.direction}, Symbol: {active_symbol}, Lot: {lot_size}, Price: {price}", "ERROR")
@@ -3557,6 +3895,10 @@ class TradingSystem:
                 return False
             
         except Exception as e:
+            # 🛡️ PROTECTION: Record exception as failure
+            if self.circuit_breaker:
+                self.circuit_breaker.record_failure()
+            
             self.log(f"Error executing order: {str(e)}", "ERROR")
             return False
     
@@ -8693,6 +9035,71 @@ class TradingSystem:
                 self.log(f"Error getting tick data for {symbol}: {str(e)}", "ERROR")
                 time.sleep(0.1) if attempt < max_attempts - 1 else None
         return None
+
+    def get_protection_status(self) -> dict:
+        """Get comprehensive status of all protection systems"""
+        status = {
+            "rate_limiting": {
+                "enabled": self.rate_limiter is not None,
+                "status": self.rate_limiter.get_status() if self.rate_limiter else None
+            },
+            "circuit_breaker": {
+                "enabled": self.circuit_breaker is not None, 
+                "status": self.circuit_breaker.get_status() if self.circuit_breaker else None
+            },
+            "validation": {
+                "enabled": True,
+                "config": self.validation_config
+            }
+        }
+        return status
+    
+    def log_protection_status(self):
+        """Log current protection system status"""
+        status = self.get_protection_status()
+        
+        self.log("🛡️ Protection System Status:", "INFO")
+        
+        # Rate limiting status
+        if status["rate_limiting"]["enabled"]:
+            rl_status = status["rate_limiting"]["status"]
+            self.log(f"   📊 Rate Limiter: {rl_status['orders_this_minute']}/{rl_status['max_per_minute']} per minute, {rl_status['orders_this_hour']}/{rl_status['max_per_hour']} per hour", "INFO")
+            self.log(f"       Can place order: {'✅ Yes' if rl_status['can_place_order'] else '❌ No'}", "INFO")
+        else:
+            self.log(f"   📊 Rate Limiter: ❌ Disabled", "INFO")
+            
+        # Circuit breaker status
+        if status["circuit_breaker"]["enabled"]:
+            cb_status = status["circuit_breaker"]["status"]
+            self.log(f"   🔧 Circuit Breaker: {cb_status['state']} ({cb_status['failure_count']}/{cb_status['threshold']} failures)", "INFO")
+            self.log(f"       Can execute: {'✅ Yes' if cb_status['can_execute'] else '❌ No'}", "INFO")
+            if cb_status['time_until_recovery']:
+                self.log(f"       Recovery in: {cb_status['time_until_recovery']:.0f} seconds", "INFO")
+        else:
+            self.log(f"   🔧 Circuit Breaker: ❌ Disabled", "INFO")
+            
+        # Validation status
+        validation = status["validation"]["config"]
+        self.log(f"   ✅ Enhanced Validation: {'🟢 Enabled' if validation else '🔴 Disabled'}", "INFO")
+        if validation:
+            self.log(f"       Connection health check: {'🟢' if validation.get('connection_health_check') else '🔴'}", "INFO")
+            self.log(f"       Signal confidence threshold: {validation.get('signal_confidence_threshold', 'N/A')}", "INFO")
+            self.log(f"       Market hours check: {'🟢' if validation.get('market_hours_check') else '🔴'}", "INFO")
+
+    def reset_protection_systems(self):
+        """Reset all protection systems to initial state"""
+        self.log("🔄 Resetting protection systems...", "INFO")
+        
+        if self.rate_limiter:
+            self.rate_limiter.order_timestamps = []
+            self.rate_limiter.last_order_time = None
+            self.log("   📊 Rate limiter reset", "INFO")
+            
+        if self.circuit_breaker:
+            self.circuit_breaker.reset()
+            self.log("   🔧 Circuit breaker reset", "INFO")
+            
+        self.log("✅ Protection systems reset complete", "INFO")
 
     def test_order_execution(self) -> bool:
         """Test method to verify order execution is working and orders reach broker"""
