@@ -418,7 +418,31 @@ class TradingSystem:
             "order_execution": {
                 "magic_number": 234000,  # Simple magic number for all orders
                 "type_filling_fallback": "IOC",  # Options: "IOC", "RETURN", "FOK", "auto"
-                "max_filling_attempts": 3  # Maximum ORDER_FILLING types to try
+                "max_filling_attempts": 3,  # Maximum ORDER_FILLING types to try
+                # Adaptive price validation thresholds
+                "price_validation": {
+                    "enabled": True,
+                    # Static fallback thresholds (used when adaptive calculation fails)
+                    "static_staleness_threshold": 10.0,  # seconds
+                    "static_deviation_threshold": 2.0,   # percentage
+                    # Adaptive threshold configuration
+                    "adaptive_thresholds": {
+                        "enabled": True,
+                        # Price deviation adaptive settings
+                        "deviation_base_percentage": 0.5,    # Base percentage for low volatility
+                        "deviation_volatility_multiplier": 2.0,  # Multiplier for high volatility
+                        "deviation_min_threshold": 0.2,      # Minimum threshold (0.2%)
+                        "deviation_max_threshold": 5.0,      # Maximum threshold (5.0%)
+                        # Price staleness adaptive settings
+                        "staleness_base_seconds": 5.0,       # Base seconds for frequent updates
+                        "staleness_frequency_multiplier": 3.0,  # Multiplier for infrequent updates
+                        "staleness_min_threshold": 2.0,      # Minimum threshold (2 seconds)
+                        "staleness_max_threshold": 30.0,     # Maximum threshold (30 seconds)
+                        # Market condition detection
+                        "volatility_window_minutes": 5,      # Window for volatility calculation
+                        "update_frequency_window_minutes": 3, # Window for update frequency calculation
+                    }
+                }
             },
             "order_protection": {
                 "rate_limiting": {
@@ -3679,6 +3703,117 @@ class TradingSystem:
             self.log(f"Lot size validation error: {str(e)}", "ERROR")
             return self.config["trading_parameters"]["base_lot_size"]
 
+    def _calculate_market_volatility(self, symbol: str, window_minutes: int = 5) -> float:
+        """Calculate market volatility based on recent price movements"""
+        try:
+            if not MT5_AVAILABLE:
+                return 1.0  # Default moderate volatility
+                
+            # Get recent ticks for volatility calculation
+            import pandas as pd
+            from datetime import datetime, timedelta
+            
+            end_time = datetime.now()
+            start_time = end_time - timedelta(minutes=window_minutes)
+            
+            ticks = mt5.copy_ticks_range(symbol, start_time, end_time, mt5.COPY_TICKS_ALL)
+            if ticks is None or len(ticks) < 10:
+                self.log(f"📊 Insufficient tick data for volatility calculation, using default", "DEBUG")
+                return 1.0
+                
+            df = pd.DataFrame(ticks)
+            if 'bid' not in df.columns or 'ask' not in df.columns:
+                return 1.0
+                
+            # Calculate mid-price and price changes
+            df['mid_price'] = (df['bid'] + df['ask']) / 2
+            df['price_change'] = df['mid_price'].pct_change().abs()
+            
+            # Calculate volatility as standard deviation of price changes
+            volatility = df['price_change'].std()
+            
+            # Normalize volatility (0.001 = low, 0.01 = high)
+            normalized_volatility = min(max(volatility / 0.005, 0.2), 3.0)
+            
+            self.log(f"📊 Market volatility calculated: {normalized_volatility:.2f}", "DEBUG")
+            return normalized_volatility
+            
+        except Exception as e:
+            self.log(f"⚠️ Error calculating market volatility: {str(e)}", "WARNING")
+            return 1.0  # Default moderate volatility
+
+    def _calculate_price_update_frequency(self, symbol: str, window_minutes: int = 3) -> float:
+        """Calculate price update frequency to determine staleness threshold"""
+        try:
+            if not MT5_AVAILABLE:
+                return 1.0  # Default moderate frequency
+                
+            from datetime import datetime, timedelta
+            
+            end_time = datetime.now()
+            start_time = end_time - timedelta(minutes=window_minutes)
+            
+            ticks = mt5.copy_ticks_range(symbol, start_time, end_time, mt5.COPY_TICKS_ALL)
+            if ticks is None or len(ticks) < 5:
+                self.log(f"📊 Insufficient tick data for frequency calculation, using default", "DEBUG")
+                return 1.0
+                
+            # Calculate average time between ticks
+            timestamps = [tick.time for tick in ticks]
+            if len(timestamps) < 2:
+                return 1.0
+                
+            time_diffs = [timestamps[i] - timestamps[i-1] for i in range(1, len(timestamps))]
+            avg_interval = sum(time_diffs) / len(time_diffs)
+            
+            # Convert to frequency multiplier (lower interval = higher frequency = lower multiplier)
+            # 1 second interval = 0.5x, 10 seconds = 2.0x multiplier
+            frequency_multiplier = max(min(avg_interval / 5.0, 3.0), 0.3)
+            
+            self.log(f"📊 Price update frequency multiplier: {frequency_multiplier:.2f} (avg interval: {avg_interval:.1f}s)", "DEBUG")
+            return frequency_multiplier
+            
+        except Exception as e:
+            self.log(f"⚠️ Error calculating price update frequency: {str(e)}", "WARNING")
+            return 1.0  # Default moderate frequency
+
+    def _get_adaptive_price_thresholds(self, symbol: str) -> tuple:
+        """Calculate adaptive price validation thresholds based on market conditions"""
+        try:
+            config = self.config["order_execution"]["price_validation"]
+            adaptive_config = config["adaptive_thresholds"]
+            
+            if not adaptive_config["enabled"]:
+                # Return static thresholds
+                staleness_threshold = config["static_staleness_threshold"]
+                deviation_threshold = config["static_deviation_threshold"]
+                self.log(f"📊 Using static thresholds: staleness={staleness_threshold}s, deviation={deviation_threshold}%", "DEBUG")
+                return staleness_threshold, deviation_threshold
+            
+            # Calculate market volatility and update frequency
+            volatility = self._calculate_market_volatility(symbol, adaptive_config["volatility_window_minutes"])
+            frequency_multiplier = self._calculate_price_update_frequency(symbol, adaptive_config["update_frequency_window_minutes"])
+            
+            # Calculate adaptive deviation threshold
+            base_deviation = adaptive_config["deviation_base_percentage"]
+            deviation_threshold = base_deviation * (1 + (volatility - 1) * adaptive_config["deviation_volatility_multiplier"])
+            deviation_threshold = max(min(deviation_threshold, adaptive_config["deviation_max_threshold"]), 
+                                    adaptive_config["deviation_min_threshold"])
+            
+            # Calculate adaptive staleness threshold
+            base_staleness = adaptive_config["staleness_base_seconds"]
+            staleness_threshold = base_staleness * frequency_multiplier
+            staleness_threshold = max(min(staleness_threshold, adaptive_config["staleness_max_threshold"]), 
+                                    adaptive_config["staleness_min_threshold"])
+            
+            self.log(f"📊 Adaptive thresholds: staleness={staleness_threshold:.1f}s, deviation={deviation_threshold:.2f}% (volatility={volatility:.2f}, freq={frequency_multiplier:.2f})", "DEBUG")
+            return staleness_threshold, deviation_threshold
+            
+        except Exception as e:
+            self.log(f"⚠️ Error calculating adaptive thresholds: {str(e)}, using static fallback", "WARNING")
+            config = self.config["order_execution"]["price_validation"]
+            return config["static_staleness_threshold"], config["static_deviation_threshold"]
+
     def _validate_order_prerequisites(self, signal: Signal, lot_size: float) -> bool:
         """Enhanced pre-order validation with protection systems"""
         try:
@@ -3775,6 +3910,40 @@ class TradingSystem:
                 if not symbol_info.trade_mode == mt5.SYMBOL_TRADE_MODE_FULL:
                     self.log(f"❌ Order prerequisite failed: Symbol {self.current_symbol} trading restricted", "WARNING")
                     return False
+            
+            # Adaptive price validation (if enabled)
+            if self.config["order_execution"]["price_validation"]["enabled"]:
+                staleness_threshold, deviation_threshold = self._get_adaptive_price_thresholds(self.current_symbol)
+                
+                # Get current price for validation
+                tick = mt5.symbol_info_tick(self.current_symbol) if MT5_AVAILABLE else None
+                if tick is None:
+                    self.log(f"❌ Order prerequisite failed: Cannot get current price for {self.current_symbol}", "WARNING")
+                    return False
+                
+                # Price staleness check
+                from datetime import datetime
+                current_time = datetime.now()
+                price_time = datetime.fromtimestamp(tick.time)
+                price_age = (current_time - price_time).total_seconds()
+                
+                if price_age > staleness_threshold:
+                    self.log(f"❌ Order prerequisite failed: Price data too stale ({price_age:.1f}s > {staleness_threshold:.1f}s threshold)", "WARNING")
+                    return False
+                
+                # Price deviation validation (if signal has price)
+                if hasattr(signal, 'price') and signal.price > 0:
+                    current_price = (tick.bid + tick.ask) / 2
+                    price_deviation = abs(signal.price - current_price) / current_price * 100
+                    
+                    if price_deviation > deviation_threshold:
+                        self.log(f"❌ Order prerequisite failed: Price deviation too high ({price_deviation:.2f}% > {deviation_threshold:.2f}% threshold)", "WARNING")
+                        self.log(f"   Signal price: {signal.price:.5f}, Current price: {current_price:.5f}", "DEBUG")
+                        return False
+                    
+                    self.log(f"✅ Price validation passed: staleness={price_age:.1f}s, deviation={price_deviation:.2f}%", "DEBUG")
+                else:
+                    self.log(f"✅ Price staleness validation passed: {price_age:.1f}s (no signal price for deviation check)", "DEBUG")
             
             self.log("✅ Order prerequisites validation passed", "DEBUG")
             return True
