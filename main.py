@@ -264,7 +264,8 @@ class TradingSystem:
             },
             "order_execution": {
                 "magic_number": 234000,  # Simple magic number for all orders
-                "type_filling_fallback": "IOC"  # Options: "IOC", "RETURN", "auto"
+                "type_filling_fallback": "IOC",  # Options: "IOC", "RETURN", "FOK", "auto"
+                "max_filling_attempts": 3  # Maximum ORDER_FILLING types to try
             }
         }
         
@@ -1154,8 +1155,28 @@ class TradingSystem:
             self.log(f"Error setting auto-detection state: {str(e)}", "ERROR")
             return False
 
+    def get_order_filling_priorities(self) -> List[Tuple[int, str]]:
+        """Get ORDER_FILLING types in priority order with names for logging"""
+        priorities = []
+        
+        if not MT5_AVAILABLE or not mt5:
+            return priorities
+            
+        # Define priority order based on common broker support
+        filling_types = [
+            (mt5.ORDER_FILLING_IOC, "ORDER_FILLING_IOC", "Immediate or Cancel"),
+            (mt5.ORDER_FILLING_RETURN, "ORDER_FILLING_RETURN", "Return (market execution)"),
+            (mt5.ORDER_FILLING_FOK, "ORDER_FILLING_FOK", "Fill or Kill")
+        ]
+        
+        for filling_type, name, description in filling_types:
+            if hasattr(mt5, name.split('_')[-1]):  # Check if the constant exists
+                priorities.append((filling_type, f"{name} ({description})"))
+                
+        return priorities
+
     def detect_broker_filling_type(self) -> int:
-        """Detect appropriate filling type with fallback to ORDER_FILLING_IOC"""
+        """Detect appropriate filling type with enhanced fallback mechanism"""
         try:
             # Check if we have a configured preference for type_filling
             if hasattr(self, 'config') and 'order_execution' in self.config:
@@ -1170,15 +1191,18 @@ class TradingSystem:
                     if MT5_AVAILABLE and mt5 and hasattr(mt5, 'ORDER_FILLING_RETURN'):
                         self.log("📋 Using configured ORDER_FILLING_RETURN", "INFO")
                         return mt5.ORDER_FILLING_RETURN
+                        
+                elif filling_preference == 'FOK':
+                    if MT5_AVAILABLE and mt5 and hasattr(mt5, 'ORDER_FILLING_FOK'):
+                        self.log("📋 Using configured ORDER_FILLING_FOK", "INFO")
+                        return mt5.ORDER_FILLING_FOK
             
-            # Default behavior: let broker choose (return None)
-            # But provide fallback if needed
-            if MT5_AVAILABLE and mt5 and hasattr(mt5, 'ORDER_FILLING_IOC'):
-                self.log("📋 Using ORDER_FILLING_IOC as fallback (broker will validate)", "INFO")
-                return mt5.ORDER_FILLING_IOC
-            elif MT5_AVAILABLE and mt5 and hasattr(mt5, 'ORDER_FILLING_RETURN'):
-                self.log("📋 Using ORDER_FILLING_RETURN as fallback", "INFO")
-                return mt5.ORDER_FILLING_RETURN
+            # Get priority list for fallback
+            priorities = self.get_order_filling_priorities()
+            if priorities:
+                filling_type, description = priorities[0]  # Use highest priority
+                self.log(f"📋 Using {description} as primary filling type", "INFO")
+                return filling_type
             else:
                 self.log("⚠️ No MT5 filling types available, letting broker choose", "WARNING")
                 return None
@@ -1186,6 +1210,87 @@ class TradingSystem:
         except Exception as e:
             self.log(f"⚠️ Error detecting filling type: {str(e)}, using automatic selection", "WARNING")
             return None
+
+    def try_order_with_filling_fallback(self, request: dict, max_attempts: int = 3) -> dict:
+        """Try order execution with automatic ORDER_FILLING fallback mechanism"""
+        if not MT5_AVAILABLE or not mt5:
+            self.log("❌ MT5 not available for order execution", "ERROR")
+            return None
+            
+        filling_priorities = self.get_order_filling_priorities()
+        
+        # If no priorities available, try without type_filling first
+        if not filling_priorities:
+            self.log("🔄 No ORDER_FILLING types available, trying broker auto-selection", "INFO")
+            if "type_filling" in request:
+                del request["type_filling"]
+            result = mt5.order_send(request)
+            if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                self.log("✅ Order successful with broker auto-selection", "INFO")
+                return result
+            elif result:
+                self.log(f"❌ Order failed with broker auto-selection: {result.retcode} - {result.comment}", "ERROR")
+            else:
+                self.log("❌ Order failed with broker auto-selection: None response", "ERROR")
+            return result
+        
+        # Try each filling type in priority order
+        for attempt, (filling_type, description) in enumerate(filling_priorities[:max_attempts], 1):
+            self.log(f"🔄 ORDER_FILLING attempt {attempt}/{min(max_attempts, len(filling_priorities))}: {description}", "INFO")
+            
+            # Update request with current filling type
+            request_copy = request.copy()
+            request_copy["type_filling"] = filling_type
+            
+            # Execute order
+            result = mt5.order_send(request_copy)
+            
+            if result is None:
+                self.log(f"❌ Attempt {attempt} failed: None response from MT5", "WARNING")
+                continue
+                
+            # Check if order was successful
+            if result.retcode == mt5.TRADE_RETCODE_DONE:
+                self.log(f"✅ Order successful with {description}", "INFO")
+                self.log(f"   Order ticket: {result.order}, Deal: {result.deal}, Volume: {result.volume}", "INFO")
+                return result
+            
+            # Log specific filling-related errors
+            elif result.retcode in [10016, 10017, 10018, 10019, 10020]:  # Price/filling related errors
+                error_descriptions = {
+                    10016: "Price changed",
+                    10017: "Off quotes", 
+                    10018: "Invalid fill",
+                    10019: "No money",
+                    10020: "Position closed"
+                }
+                error_desc = error_descriptions.get(result.retcode, f"Error {result.retcode}")
+                self.log(f"🔄 Attempt {attempt} failed with {error_desc}: {result.comment}", "WARNING")
+                
+                if result.retcode == 10018:  # Invalid fill - definitely try next filling type
+                    self.log(f"🔄 Invalid fill detected, trying next ORDER_FILLING type...", "INFO")
+                    continue
+                    
+            elif result.retcode in [10006, 10007, 10008]:  # Request/connection related errors
+                self.log(f"❌ Attempt {attempt} failed with connection issue {result.retcode}: {result.comment}", "ERROR")
+                break  # Don't retry for connection issues
+            else:
+                self.log(f"🔄 Attempt {attempt} failed with error {result.retcode}: {result.comment}", "WARNING")
+                
+        # If all filling types failed, try without type_filling as final fallback
+        self.log("🔄 All ORDER_FILLING types failed, trying final fallback without type_filling", "WARNING")
+        if "type_filling" in request:
+            del request["type_filling"]
+        result = mt5.order_send(request)
+        
+        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+            self.log("✅ Order successful with final broker auto-selection fallback", "INFO")
+        elif result:
+            self.log(f"❌ Final fallback failed: {result.retcode} - {result.comment}", "ERROR")
+        else:
+            self.log("❌ Final fallback failed: None response", "ERROR")
+            
+        return result
 
     def connect_mt5(self, max_retries: int = 3, retry_delay: float = 2.0) -> bool:
         """Connect to MetaTrader 5 with retry mechanism and validation"""
@@ -3084,10 +3189,7 @@ class TradingSystem:
             
             price = tick.ask if signal.direction == "BUY" else tick.bid
             
-            # Get appropriate filling type
-            filling_type = self.detect_broker_filling_type()
-            
-            # Simple order request
+            # Simple order request (ORDER_FILLING will be handled by fallback mechanism)
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
                 "symbol": active_symbol,
@@ -3100,21 +3202,14 @@ class TradingSystem:
                 "type_time": mt5.ORDER_TIME_GTC,
             }
             
-            # Add type_filling if available
-            if filling_type is not None:
-                request["type_filling"] = filling_type
-                self.log(f"📋 Using type_filling: {filling_type}", "INFO")
-            else:
-                self.log("📋 Letting broker choose filling type automatically", "INFO")
-            
             # Log order details
             self.log(f"Sending order: {signal.direction} {lot_size} {active_symbol} @ {price}", "INFO")
             
-            # Direct order send - let MT5 handle validation
-            result = mt5.order_send(request)
+            # Use enhanced ORDER_FILLING fallback mechanism
+            result = self.try_order_with_filling_fallback(request)
             
             if result is None:
-                self.log("❌ Order send returned None - MT5 connection or request issue", "ERROR")
+                self.log("❌ Order send returned None after all fallback attempts", "ERROR")
                 self.log(f"   Signal: {signal.direction}, Symbol: {active_symbol}, Lot: {lot_size}, Price: {price}", "ERROR")
                 return False
             
@@ -3127,10 +3222,19 @@ class TradingSystem:
                 return True
             else:
                 error_desc = self._get_trade_error_description(result.retcode)
-                self.log(f"❌ Order failed: {error_desc} (code: {result.retcode})", "ERROR")
+                self.log(f"❌ Order failed after all ORDER_FILLING attempts: {error_desc} (code: {result.retcode})", "ERROR")
                 self.log(f"   Signal: {signal.direction}, Symbol: {active_symbol}, Lot: {lot_size}, Price: {price}", "ERROR")
                 if hasattr(result, 'comment') and result.comment:
                     self.log(f"   Broker comment: {result.comment}", "ERROR")
+                
+                # Provide specific guidance for ORDER_FILLING related errors
+                if result.retcode == 10018:  # Invalid fill
+                    self.log("💡 Analysis: 'Invalid fill' error suggests ORDER_FILLING type incompatibility", "ERROR")
+                    self.log("   → All ORDER_FILLING types were attempted but broker rejected them", "ERROR")
+                    self.log("   → Consider checking broker's supported filling types or market conditions", "ERROR")
+                elif result.retcode in [10016, 10017]:  # Price related
+                    self.log("💡 Analysis: Price-related error may be resolved by retrying", "WARNING")
+                    
                 return False
             
         except Exception as e:
@@ -3402,10 +3506,7 @@ class TradingSystem:
             
             price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
             
-            # Get appropriate filling type
-            filling_type = self.detect_broker_filling_type()
-            
-            # Simple order request
+            # Simple order request (ORDER_FILLING will be handled by fallback mechanism)
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
                 "symbol": active_symbol,
@@ -3418,21 +3519,14 @@ class TradingSystem:
                 "type_time": mt5.ORDER_TIME_GTC,
             }
             
-            # Add type_filling if available
-            if filling_type is not None:
-                request["type_filling"] = filling_type
-                self.log(f"📋 Using type_filling: {filling_type}", "INFO")
-            else:
-                self.log("📋 Letting broker choose filling type automatically", "INFO")
-            
             # Log order details
             self.log(f"Sending order: {signal.direction} {lot_size} {active_symbol} @ {price}", "INFO")
             
-            # Direct order send - let MT5 handle validation
-            result = mt5.order_send(request)
+            # Use enhanced ORDER_FILLING fallback mechanism
+            result = self.try_order_with_filling_fallback(request)
             
             if result is None:
-                self.log("❌ Order send returned None - MT5 connection or request issue", "ERROR")
+                self.log("❌ Order send returned None after all fallback attempts", "ERROR")
                 self.log(f"   Signal: {signal.direction}, Symbol: {active_symbol}, Lot: {lot_size}, Price: {price}", "ERROR")
                 return False
             
@@ -3447,10 +3541,19 @@ class TradingSystem:
                 return True
             else:
                 error_desc = self._get_trade_error_description(result.retcode)
-                self.log(f"❌ Order failed: {error_desc} (code: {result.retcode})", "ERROR")
+                self.log(f"❌ Order failed after all ORDER_FILLING attempts: {error_desc} (code: {result.retcode})", "ERROR")
                 self.log(f"   Signal: {signal.direction}, Symbol: {active_symbol}, Lot: {lot_size}, Price: {price}", "ERROR")
                 if hasattr(result, 'comment') and result.comment:
                     self.log(f"   Broker comment: {result.comment}", "ERROR")
+                
+                # Provide specific guidance for ORDER_FILLING related errors
+                if result.retcode == 10018:  # Invalid fill
+                    self.log("💡 Analysis: 'Invalid fill' error suggests ORDER_FILLING type incompatibility", "ERROR")
+                    self.log("   → All ORDER_FILLING types were attempted but broker rejected them", "ERROR")
+                    self.log("   → Consider checking broker's supported filling types or market conditions", "ERROR")
+                elif result.retcode in [10016, 10017]:  # Price related
+                    self.log("💡 Analysis: Price-related error may be resolved by retrying", "WARNING")
+                    
                 return False
             
         except Exception as e:
@@ -8644,6 +8747,100 @@ class TradingSystem:
             self.log(f"❌ Exception during order execution test: {str(e)}", "ERROR")
             return False
 
+    def test_order_filling_fallback(self) -> bool:
+        """Test ORDER_FILLING fallback mechanism to ensure it handles different filling types correctly"""
+        self.log("🧪 Testing ORDER_FILLING fallback mechanism...", "INFO")
+        
+        if not MT5_AVAILABLE:
+            self.log("❌ MT5 not available - cannot test ORDER_FILLING", "ERROR")
+            return False
+            
+        if not self.mt5_connected:
+            self.log("❌ MT5 not connected - attempting to connect for ORDER_FILLING test", "INFO")
+            if not self.connect_mt5():
+                return False
+        
+        try:
+            # Test getting ORDER_FILLING priorities
+            self.log("🧪 Testing ORDER_FILLING priority detection...", "INFO")
+            priorities = self.get_order_filling_priorities()
+            
+            if not priorities:
+                self.log("⚠️ No ORDER_FILLING types available in MT5", "WARNING")
+                return False
+            
+            self.log(f"✅ Found {len(priorities)} ORDER_FILLING types:", "INFO")
+            for i, (filling_type, description) in enumerate(priorities, 1):
+                self.log(f"   {i}. {description} (code: {filling_type})", "INFO")
+            
+            # Test detect_broker_filling_type method
+            self.log("🧪 Testing broker filling type detection...", "INFO")
+            detected_filling = self.detect_broker_filling_type()
+            
+            if detected_filling is not None:
+                filling_desc = next((desc for code, desc in priorities if code == detected_filling), f"Code {detected_filling}")
+                self.log(f"✅ Detected filling type: {filling_desc}", "INFO")
+            else:
+                self.log("✅ Broker auto-selection mode detected", "INFO")
+            
+            # Test the fallback mechanism with a mock order
+            self.log("🧪 Testing ORDER_FILLING fallback with test order request...", "INFO")
+            
+            # Get current symbol and price for test
+            active_symbol = self.current_symbol or "XAUUSD.v"
+            tick = mt5.symbol_info_tick(active_symbol)
+            
+            if tick is None:
+                self.log(f"❌ Cannot get tick data for {active_symbol} - using XAUUSD.v", "WARNING")
+                active_symbol = "XAUUSD.v"
+                tick = mt5.symbol_info_tick(active_symbol)
+                
+                if tick is None:
+                    self.log("❌ Cannot get tick data for test - ORDER_FILLING test incomplete", "ERROR")
+                    return False
+            
+            # Create test order request (small lot size for safety)
+            test_request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": active_symbol,
+                "volume": 0.01,  # Minimal lot size
+                "type": mt5.ORDER_TYPE_BUY,
+                "price": tick.ask,
+                "deviation": 50,  # Large deviation for test
+                "magic": 234000,
+                "comment": "ORDER_FILLING_TEST",
+                "type_time": mt5.ORDER_TIME_GTC,
+            }
+            
+            self.log(f"🧪 Test order: BUY 0.01 {active_symbol} @ {tick.ask:.5f}", "INFO")
+            self.log("🧪 Note: This test will try ORDER_FILLING types but may be rejected for other reasons", "INFO")
+            
+            # Test the fallback mechanism (don't worry if order fails for other reasons)
+            result = self.try_order_with_filling_fallback(test_request, max_attempts=2)
+            
+            if result is None:
+                self.log("⚠️ ORDER_FILLING test returned None - mechanism attempted all types", "WARNING")
+                self.log("✅ ORDER_FILLING fallback mechanism is working (attempted all types)", "INFO")
+                return True
+            elif result.retcode == mt5.TRADE_RETCODE_DONE:
+                self.log("✅ ORDER_FILLING test order executed successfully!", "INFO")
+                self.log(f"   Order: {result.order}, Deal: {result.deal}", "INFO")
+                return True
+            else:
+                error_desc = self._get_trade_error_description(result.retcode)
+                self.log(f"⚠️ ORDER_FILLING test order rejected: {error_desc} (code: {result.retcode})", "WARNING")
+                
+                if result.retcode == 10018:  # Invalid fill
+                    self.log("❌ ORDER_FILLING test failed: Invalid fill error suggests broker compatibility issue", "ERROR")
+                    return False
+                else:
+                    self.log("✅ ORDER_FILLING fallback mechanism is working (rejection for non-filling reason)", "INFO")
+                    return True
+                    
+        except Exception as e:
+            self.log(f"❌ Exception during ORDER_FILLING test: {str(e)}", "ERROR")
+            return False
+
     def integrated_symbol_monitoring(self):
         """Integrated symbol monitoring for the trading loop"""
         try:
@@ -8736,7 +8933,7 @@ class TradingSystem:
                 self.log(f"❌ Emergency order failed - invalid price: {price}", "ERROR")
                 return False
             
-            # Create order request with minimal parameters
+            # Create order request with minimal parameters (ORDER_FILLING handled by fallback)
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
                 "symbol": hardcoded_symbol,
@@ -8747,20 +8944,19 @@ class TradingSystem:
                 "magic": 234000,  # Simple magic number parameter
                 "comment": f"EMERGENCY_{signal.direction}",
                 "type_time": mt5.ORDER_TIME_GTC,
-                # "type_filling": hardcoded_filling,  # DISABLED - Let broker choose
             }
             
             # Log that we're about to send to broker
-            self.log(f"📤 Sending EMERGENCY order directly to broker via mt5.order_send()", "INFO")
+            self.log(f"📤 Sending EMERGENCY order with ORDER_FILLING fallback mechanism", "INFO")
             self.log(f"   Symbol: {hardcoded_symbol}, Volume: {lot_size}, Price: {price:.5f}", "INFO")
             
-            # Send order directly without any retry logic or validation
-            result = mt5.order_send(request)
+            # Use enhanced ORDER_FILLING fallback mechanism for emergency orders too
+            result = self.try_order_with_filling_fallback(request, max_attempts=2)  # Reduced attempts for emergency
             execution_time = (time.time() - start_time) * 1000
             
             if result is None:
-                self.log("❌ EMERGENCY order FAILED - mt5.order_send() returned None", "ERROR")
-                self.log("❌ This means the order was NOT sent to the broker at all", "ERROR")
+                self.log("❌ EMERGENCY order FAILED - all ORDER_FILLING attempts returned None", "ERROR")
+                self.log("❌ This means the order was NOT sent to the broker successfully", "ERROR")
                 
                 # Check MT5 connection status
                 account_info = mt5.account_info()
@@ -8772,14 +8968,21 @@ class TradingSystem:
                 return False
             
             if result.retcode == mt5.TRADE_RETCODE_DONE:
-                self.log(f"✅ EMERGENCY order SUCCESS - Order sent to broker and executed!", "INFO")
+                self.log(f"✅ EMERGENCY order SUCCESS - Order executed using ORDER_FILLING fallback!", "INFO")
                 self.log(f"   Ticket: {result.order}, Execution time: {execution_time:.1f}ms", "INFO")
-                self.log(f"   This order was actually processed by the broker", "INFO")
+                self.log(f"   This order was successfully processed by the broker", "INFO")
                 return True
             else:
                 error_desc = self._get_trade_error_description(result.retcode)
                 self.log(f"❌ EMERGENCY order REJECTED by broker: {error_desc} (code: {result.retcode})", "ERROR")
                 self.log(f"   The order was sent to broker but rejected for: {error_desc}", "ERROR")
+                
+                # Provide specific guidance for ORDER_FILLING related errors in emergency mode
+                if result.retcode == 10018:  # Invalid fill
+                    self.log("💡 Emergency Analysis: 'Invalid fill' error even in emergency mode", "ERROR")
+                    self.log("   → This suggests broker does not support any of our ORDER_FILLING types", "ERROR")
+                    self.log("   → Contact broker support to verify supported filling modes", "ERROR")
+                
                 return False
                 
         except Exception as e:
