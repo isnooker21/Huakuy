@@ -477,6 +477,52 @@ class TradingSystem:
         else:
             logger.info(message)
 
+    def get_symbol_info_with_retry(self, symbol: str, max_retries: int = 3, retry_delay: float = 0.5) -> Optional[Any]:
+        """Get symbol info with retry mechanism and symbol validation"""
+        if not MT5_AVAILABLE or not self.mt5_connected:
+            return None
+            
+        # Normalize symbol case (handle XAUUSD.V vs XAUUSD.v issues)
+        normalized_symbol = symbol.upper()
+        
+        for attempt in range(max_retries):
+            try:
+                # Check connection health before attempting
+                if not self.check_mt5_connection_health():
+                    self.log(f"MT5 connection health check failed before symbol info request (attempt {attempt + 1})", "WARNING")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay *= 1.5  # Exponential backoff
+                        continue
+                    return None
+                
+                # Try normalized symbol first
+                symbol_info = mt5.symbol_info(normalized_symbol)
+                if symbol_info is not None:
+                    return symbol_info
+                
+                # If normalized fails, try original symbol
+                if normalized_symbol != symbol:
+                    symbol_info = mt5.symbol_info(symbol)
+                    if symbol_info is not None:
+                        return symbol_info
+                
+                # Log attempt failure
+                self.log(f"Symbol info request failed for {symbol} (attempt {attempt + 1}/{max_retries})", "WARNING")
+                
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 1.5  # Exponential backoff
+                    
+            except Exception as e:
+                self.log(f"Exception getting symbol info for {symbol} (attempt {attempt + 1}): {str(e)}", "ERROR")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 1.5
+                    
+        self.log(f"❌ Failed to get symbol info for {symbol} after {max_retries} attempts", "ERROR")
+        return None
+
     def detect_broker_filling_type(self) -> int:
         """Auto-detect broker's supported filling type"""
         if not MT5_AVAILABLE:
@@ -487,8 +533,8 @@ class TradingSystem:
             return mt5.ORDER_FILLING_IOC
             
         try:
-            # Get symbol info to check filling modes
-            symbol_info = mt5.symbol_info(self.symbol)
+            # Get symbol info to check filling modes with retry
+            symbol_info = self.get_symbol_info_with_retry(self.symbol)
             if symbol_info is None:
                 self.log(f"Cannot get symbol info for {self.symbol}", "WARNING")
                 return mt5.ORDER_FILLING_IOC
@@ -2314,8 +2360,8 @@ class TradingSystem:
             # Determine order type
             order_type = mt5.ORDER_TYPE_BUY if signal.direction == "BUY" else mt5.ORDER_TYPE_SELL
             
-            # Get current market price
-            symbol_info = mt5.symbol_info(signal.symbol)
+            # Get current market price with retry
+            symbol_info = self.get_symbol_info_with_retry(signal.symbol)
             if symbol_info is None:
                 self.log(f"❌ Cannot get symbol info for {signal.symbol}", "ERROR")
                 return False
@@ -2449,69 +2495,132 @@ class TradingSystem:
             self.log(f"Error handling close action: {str(e)}", "ERROR")
             return False
 
-    def close_position_by_ticket(self, ticket: int) -> bool:
-        """🔧 Close position by ticket number - Enhanced Trading System v2.0"""
-        try:
-            if not self.mt5_connected:
-                self.log("❌ MT5 not connected for position closing", "ERROR")
-                return False
-            
-            # Find position in our local tracking
-            position = None
-            for pos in self.positions:
-                if pos.ticket == ticket:
-                    position = pos
-                    break
-            
-            if not position:
-                self.log(f"❌ Position {ticket} not found in local tracking", "ERROR")
-                return False
-            
-            # Prepare close request
-            if position.type == "BUY":
-                order_type = mt5.ORDER_TYPE_SELL
-                price = mt5.symbol_info_tick(position.symbol).bid
-            else:
-                order_type = mt5.ORDER_TYPE_BUY
-                price = mt5.symbol_info_tick(position.symbol).ask
-            
-            request = {
-                "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": position.symbol,
-                "volume": position.volume,
-                "type": order_type,
-                "position": ticket,
-                "price": price,
-                "deviation": 10,
-                "magic": 234000,
-                "comment": f"v2.0-close-{ticket}",
-                "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": self.filling_type or mt5.ORDER_FILLING_IOC,
-            }
-            
-            # Send close order
-            result = mt5.order_send(request)
-            
-            if result is None:
-                self.log(f"❌ Failed to close position {ticket} - no result", "ERROR")
-                return False
-            
-            if result.retcode != mt5.TRADE_RETCODE_DONE:
-                error_desc = self._get_trade_error_description(result.retcode)
-                self.log(f"❌ Failed to close position {ticket}: {error_desc}", "ERROR")
-                return False
-            
-            # Log successful close
-            self.log(f"✅ Position {ticket} closed successfully at {price:.5f}")
-            
-            # Remove from local tracking
-            self.positions = [pos for pos in self.positions if pos.ticket != ticket]
-            
-            return True
-            
-        except Exception as e:
-            self.log(f"❌ Error closing position {ticket}: {str(e)}", "ERROR")
+    def close_position_by_ticket(self, ticket: int, max_retries: int = 3, retry_delay: float = 1.0) -> bool:
+        """🔧 Close position by ticket number with retry logic - Enhanced Trading System v2.0"""
+        if not self.mt5_connected:
+            self.log("❌ MT5 not connected for position closing", "ERROR")
             return False
+        
+        # Find position in our local tracking
+        position = None
+        for pos in self.positions:
+            if pos.ticket == ticket:
+                position = pos
+                break
+        
+        if not position:
+            self.log(f"❌ Position {ticket} not found in local tracking", "ERROR")
+            return False
+        
+        # Retryable error codes that warrant another attempt
+        retryable_errors = {
+            mt5.TRADE_RETCODE_INVALID_FILL,
+            mt5.TRADE_RETCODE_REQUOTE,
+            mt5.TRADE_RETCODE_PRICE_CHANGED,
+            mt5.TRADE_RETCODE_TIMEOUT,
+            mt5.TRADE_RETCODE_PRICE_OFF,
+            mt5.TRADE_RETCODE_TOO_MANY_REQUESTS,
+            mt5.TRADE_RETCODE_CONNECTION
+        }
+        
+        for attempt in range(max_retries):
+            try:
+                # Check connection health before each attempt
+                if not self.check_mt5_connection_health():
+                    self.log(f"MT5 connection health check failed for position close (attempt {attempt + 1})", "WARNING")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay *= 1.5  # Exponential backoff
+                        continue
+                    return False
+                
+                # Get fresh tick data for each attempt
+                tick = mt5.symbol_info_tick(position.symbol)
+                if tick is None:
+                    self.log(f"❌ Cannot get tick data for {position.symbol} (attempt {attempt + 1})", "WARNING")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay *= 1.5
+                        continue
+                    return False
+                
+                # Prepare close request with fresh price
+                if position.type == "BUY":
+                    order_type = mt5.ORDER_TYPE_SELL
+                    price = tick.bid
+                else:
+                    order_type = mt5.ORDER_TYPE_BUY
+                    price = tick.ask
+                
+                # Adjust deviation based on attempt number
+                deviation = 10 + (attempt * 5)  # Increase deviation on retries
+                
+                request = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "symbol": position.symbol,
+                    "volume": position.volume,
+                    "type": order_type,
+                    "position": ticket,
+                    "price": price,
+                    "deviation": deviation,
+                    "magic": 234000,
+                    "comment": f"v2.0-close-{ticket}-{attempt + 1}",
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": self.filling_type or mt5.ORDER_FILLING_IOC,
+                }
+                
+                # Send close order
+                result = mt5.order_send(request)
+                
+                if result is None:
+                    self.log(f"❌ Failed to close position {ticket} - no result (attempt {attempt + 1})", "WARNING")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay *= 1.5
+                        continue
+                    self.log(f"❌ Failed to close position {ticket} after {max_retries} attempts - no result", "ERROR")
+                    return False
+                
+                if result.retcode == mt5.TRADE_RETCODE_DONE:
+                    # Success!
+                    self.log(f"✅ Position {ticket} closed successfully at {price:.5f} (attempt {attempt + 1})")
+                    
+                    # Remove from local tracking
+                    self.positions = [pos for pos in self.positions if pos.ticket != ticket]
+                    return True
+                
+                # Handle error with retry logic
+                error_desc = self._get_trade_error_description(result.retcode)
+                
+                if result.retcode in retryable_errors:
+                    self.log(f"⚠️ Retryable error closing position {ticket} (attempt {attempt + 1}): {error_desc}", "WARNING")
+                    
+                    # Handle specific error cases
+                    if result.retcode == mt5.TRADE_RETCODE_INVALID_FILL:
+                        # Try different filling types for Invalid fill errors
+                        if hasattr(self, 'filling_types_priority') and attempt < len(self.filling_types_priority):
+                            old_filling = self.filling_type
+                            self.filling_type = self.filling_types_priority[attempt % len(self.filling_types_priority)]
+                            self.log(f"🔄 Switching filling type for retry (attempt {attempt + 1})")
+                    
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay *= 1.5  # Exponential backoff
+                        continue
+                else:
+                    # Non-retryable error
+                    self.log(f"❌ Non-retryable error closing position {ticket}: {error_desc}", "ERROR")
+                    return False
+                    
+            except Exception as e:
+                self.log(f"❌ Exception closing position {ticket} (attempt {attempt + 1}): {str(e)}", "ERROR")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 1.5
+                    continue
+                
+        self.log(f"❌ Failed to close position {ticket} after {max_retries} attempts", "ERROR")
+        return False
 
     def _validate_lot_size(self, lot_size: float) -> float:
         """Validate and normalize lot size"""
@@ -2528,9 +2637,12 @@ class TradingSystem:
             if not isinstance(signal, Signal):
                 raise ValidationError(f"Signal must be Signal object, got {type(signal)}")
             
-            # Connection validation
+            # Connection validation with health check
             if not self.mt5_connected:
                 raise ValidationError("MT5 not connected")
+                
+            if not self.check_mt5_connection_health():
+                raise ValidationError("MT5 connection health check failed")
                 
             if self.circuit_breaker_open:
                 raise ValidationError("Circuit breaker is open")
@@ -2549,10 +2661,10 @@ class TradingSystem:
             if self.filling_type is None:
                 self.filling_type = self.detect_broker_filling_type()
             
-            # Validate symbol
-            symbol_info = mt5.symbol_info(self.symbol)
+            # Validate symbol with retry mechanism
+            symbol_info = self.get_symbol_info_with_retry(self.symbol)
             if symbol_info is None:
-                raise ValidationError(f"Symbol {self.symbol} not available")
+                raise ValidationError(f"Symbol {self.symbol} not available after retry")
             
             if not symbol_info.visible:
                 self.log(f"Making symbol {self.symbol} visible", "INFO")
