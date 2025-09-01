@@ -188,7 +188,7 @@ class TradingSystem:
         self.config = {
             "trading_parameters": {
                 "symbol": "XAUUSD.v",
-                "fallback_symbols": ["XAUUSD", "XAUUSD.V", "XAUUSD.v", "XAUUSD.c"],  # Fallback symbol list
+                "fallback_symbols": ["XAUUSD.v", "XAUUSD", "XAUUSD.c", "XAUUSD.V"],  # FIXED: Prioritize lowercase detected symbols
                 "base_lot_size": 0.01,
                 "max_lot_size": 0.1,
                 "max_positions": 50,
@@ -591,7 +591,7 @@ class TradingSystem:
             logger.info(message)
 
     def get_symbol_info_with_retry(self, symbol: str, max_retries: int = None, retry_delay: float = None) -> Optional[Any]:
-        """Enhanced symbol info retrieval with fallback mechanisms and caching"""
+        """Enhanced symbol info retrieval with fallback mechanisms, caching and case-sensitive handling"""
         start_time = time.time()
         
         if not MT5_AVAILABLE or not self.mt5_connected:
@@ -612,8 +612,28 @@ class TradingSystem:
             self.symbol_operation_stats['successful_requests'] += 1
             return cached_result
         
-        # Try primary symbol and fallbacks
-        symbols_to_try = [symbol] + [s for s in self.fallback_symbols if s != symbol]
+        # FIXED: Try symbol in order of preference, prioritizing auto-detected symbols
+        symbols_to_try = []
+        
+        # 1. If the requested symbol is in detected symbols, try it first (preserve case)
+        if symbol in self.detected_xauusd_symbols:
+            symbols_to_try.append(symbol)
+        
+        # 2. Add other detected symbols as fallbacks (case-preserved)
+        for detected_symbol in self.detected_xauusd_symbols:
+            if detected_symbol != symbol and detected_symbol not in symbols_to_try:
+                symbols_to_try.append(detected_symbol)
+        
+        # 3. Add configured fallback symbols if not already included
+        for fallback_symbol in self.fallback_symbols:
+            if fallback_symbol not in symbols_to_try:
+                symbols_to_try.append(fallback_symbol)
+        
+        # 4. If original symbol wasn't in any list, add it
+        if symbol not in symbols_to_try:
+            symbols_to_try.insert(0, symbol)  # Try original first
+        
+        self.log(f"🔍 Trying symbols in order: {symbols_to_try}", "DEBUG")
         
         for symbol_attempt in symbols_to_try:
             result = self._attempt_symbol_info_retrieval(symbol_attempt, max_retries, retry_delay)
@@ -623,7 +643,7 @@ class TradingSystem:
                 
                 # Update current symbol if fallback was used
                 if symbol_attempt != symbol:
-                    self.log(f"✅ Using fallback symbol: {symbol_attempt} (requested: {symbol})", "INFO")
+                    self.log(f"✅ Using symbol: {symbol_attempt} (requested: {symbol})", "INFO")
                     self.current_symbol = symbol_attempt
                     self.symbol_operation_stats['fallback_used'] += 1
                 
@@ -638,21 +658,19 @@ class TradingSystem:
         return None
 
     def _attempt_symbol_info_retrieval(self, symbol: str, max_retries: int, retry_delay: float) -> Optional[Any]:
-        """Attempt to retrieve symbol info with retry logic"""
+        """Attempt to retrieve symbol info with retry logic and case-sensitive handling"""
+        
+        # FIXED: Preserve original symbol case for case-sensitive brokers
+        # Try original symbol first to respect auto-detected case
+        symbols_to_try = [symbol]
+        
+        # Only add uppercase version if it's different and not already in detected symbols
         normalized_symbol = symbol.upper()
+        if normalized_symbol != symbol and normalized_symbol not in self.detected_xauusd_symbols:
+            symbols_to_try.append(normalized_symbol)
         
         for attempt in range(max_retries):
             try:
-                # Enhanced connection health check
-                if not self._verify_symbol_availability(normalized_symbol):
-                    self.log(f"Symbol {normalized_symbol} not available on broker (attempt {attempt + 1})", "WARNING")
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
-                        if self.symbol_retry_exponential_backoff:
-                            retry_delay *= 1.5
-                        continue
-                    return None
-                
                 # Check connection health before attempting
                 if not self.check_mt5_connection_health():
                     self.log(f"MT5 connection health check failed before symbol info request (attempt {attempt + 1})", "WARNING")
@@ -663,21 +681,33 @@ class TradingSystem:
                         continue
                     return None
                 
-                # Try normalized symbol first
-                symbol_info = mt5.symbol_info(normalized_symbol)
-                if symbol_info is not None:
-                    self.log(f"✅ Successfully retrieved symbol info for {normalized_symbol}", "DEBUG")
-                    return symbol_info
-                
-                # If normalized fails, try original symbol
-                if normalized_symbol != symbol:
-                    symbol_info = mt5.symbol_info(symbol)
+                # Try each symbol variant in order of preference
+                for symbol_variant in symbols_to_try:
+                    # Enhanced connection health check for the specific symbol
+                    if not self._verify_symbol_availability(symbol_variant):
+                        self.log(f"Symbol {symbol_variant} not available on broker (attempt {attempt + 1})", "DEBUG")
+                        continue
+                    
+                    # Try to get symbol info
+                    symbol_info = mt5.symbol_info(symbol_variant)
                     if symbol_info is not None:
-                        self.log(f"✅ Successfully retrieved symbol info for {symbol} (original case)", "DEBUG")
+                        self.log(f"✅ Successfully retrieved symbol info for {symbol_variant}", "DEBUG")
+                        
+                        # Ensure symbol is selected in Market Watch if not visible
+                        if hasattr(symbol_info, 'visible') and not symbol_info.visible:
+                            self.log(f"Symbol {symbol_variant} not visible, selecting in Market Watch", "INFO")
+                            if mt5.symbol_select(symbol_variant, True):
+                                self.log(f"✅ Successfully selected {symbol_variant} in Market Watch", "INFO")
+                                # Re-get symbol info after selection
+                                symbol_info = mt5.symbol_info(symbol_variant)
+                            else:
+                                self.log(f"⚠️ Failed to select {symbol_variant} in Market Watch", "WARNING")
+                                continue
+                        
                         return symbol_info
                 
-                # Log attempt failure
-                self.log(f"Symbol info request failed for {symbol} (attempt {attempt + 1}/{max_retries})", "WARNING")
+                # Log attempt failure for all variants
+                self.log(f"Symbol info request failed for all variants of {symbol} (attempt {attempt + 1}/{max_retries})", "WARNING")
                 
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
@@ -718,26 +748,37 @@ class TradingSystem:
         self.log(f"📋 Cached symbol info for {symbol}", "DEBUG")
 
     def _verify_symbol_availability(self, symbol: str) -> bool:
-        """Verify if symbol is available on the broker"""
+        """Verify if symbol is available on the broker with case-sensitive support"""
         try:
             if not MT5_AVAILABLE or not self.mt5_connected:
                 return False
             
-            # Check if symbol exists in symbols list
+            # FIXED: Check symbol without case normalization to support case-sensitive symbols
             symbols = mt5.symbols_get(symbol)
             if symbols is None or len(symbols) == 0:
                 self.symbol_status[symbol] = {'available': False, 'last_check': time.time()}
                 return False
             
-            # Additional check for symbol visibility
+            # Additional check for symbol visibility and Market Watch selection
             symbol_info = mt5.symbol_info(symbol)
             if symbol_info is None:
                 self.symbol_status[symbol] = {'available': False, 'last_check': time.time()}
                 return False
             
-            # Check if symbol is enabled for trading
+            # Check if symbol is enabled for trading and visible
             if hasattr(symbol_info, 'visible') and not symbol_info.visible:
-                self.log(f"Symbol {symbol} exists but is not visible", "WARNING")
+                self.log(f"Symbol {symbol} exists but not visible, attempting to select in Market Watch", "INFO")
+                
+                # Try to select symbol in Market Watch
+                if mt5.symbol_select(symbol, True):
+                    self.log(f"✅ Successfully selected {symbol} in Market Watch", "INFO")
+                    # Re-check symbol info after selection
+                    symbol_info = mt5.symbol_info(symbol)
+                    if symbol_info and hasattr(symbol_info, 'visible') and symbol_info.visible:
+                        self.symbol_status[symbol] = {'available': True, 'last_check': time.time()}
+                        return True
+                
+                self.log(f"⚠️ Failed to make {symbol} visible in Market Watch", "WARNING")
                 self.symbol_status[symbol] = {'available': False, 'last_check': time.time()}
                 return False
             
@@ -836,7 +877,7 @@ class TradingSystem:
             return []
 
     def auto_detect_xauusd_symbols(self) -> List[str]:
-        """Auto-detect XAUUSD symbol variants from broker's symbol list"""
+        """Auto-detect XAUUSD symbol variants from broker's symbol list with case-sensitive support"""
         try:
             if not self.auto_detection_enabled:
                 self.log("Auto-detection disabled, using configured fallback symbols", "INFO")
@@ -861,21 +902,28 @@ class TradingSystem:
             
             detected_symbols = []
             
-            # Search for XAUUSD variations using patterns
+            # FIXED: Search for XAUUSD variations using patterns WITHOUT case normalization
             for symbol in all_symbols:
-                symbol_upper = symbol.upper()
-                
-                # Check each pattern
+                # Test patterns on original case to support case-sensitive symbols
                 for pattern in self.xauusd_pattern_variations:
-                    if re.match(pattern, symbol_upper):
+                    # Test both original case and uppercase for flexibility
+                    if re.match(pattern, symbol, re.IGNORECASE):
                         detected_symbols.append(symbol)
+                        self.log(f"🎯 Pattern '{pattern}' matched symbol '{symbol}'", "DEBUG")
                         break
             
-            # Remove duplicates and sort by preference
-            detected_symbols = list(set(detected_symbols))
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_detected = []
+            for symbol in detected_symbols:
+                if symbol not in seen:
+                    seen.add(symbol)
+                    unique_detected.append(symbol)
+            detected_symbols = unique_detected
             
-            # Sort symbols by preference (exact XAUUSD first, then by length)
+            # FIXED: Sort symbols by preference while preserving case
             def symbol_priority(symbol):
+                # Use case-insensitive comparison for priority but preserve original case
                 s = symbol.upper()
                 if s == 'XAUUSD':
                     return 0  # Highest priority
@@ -892,19 +940,26 @@ class TradingSystem:
             
             if detected_symbols:
                 self.log(f"✅ Auto-detected {len(detected_symbols)} XAUUSD symbols:", "INFO")
+                
+                # Verify each symbol is actually available and tradeable
+                verified_symbols = []
                 for i, symbol in enumerate(detected_symbols):
-                    # Verify symbol is actually available and tradeable
                     if self._verify_symbol_availability(symbol):
-                        self.log(f"  {i+1}. {symbol} ✅", "INFO")
+                        self.log(f"  {i+1}. {symbol} ✅ (Available and tradeable)", "INFO")
+                        verified_symbols.append(symbol)
                     else:
-                        self.log(f"  {i+1}. {symbol} ❌ (not available)", "WARNING")
-                        detected_symbols.remove(symbol)
+                        self.log(f"  {i+1}. {symbol} ❌ (Not available or not tradeable)", "WARNING")
                 
-                # Cache the results
-                self.detected_xauusd_symbols = detected_symbols
-                self.last_symbol_scan = current_time
-                
-                return detected_symbols
+                if verified_symbols:
+                    # Cache the verified results
+                    self.detected_xauusd_symbols = verified_symbols
+                    self.last_symbol_scan = current_time
+                    
+                    self.log(f"🎯 Final verified symbols: {verified_symbols}", "INFO")
+                    return verified_symbols
+                else:
+                    self.log("⚠️ No symbols passed verification, using fallback configuration", "WARNING")
+                    return self.fallback_symbols
             else:
                 self.log("⚠️ No XAUUSD symbols auto-detected, using fallback configuration", "WARNING")
                 return self.fallback_symbols
@@ -2999,11 +3054,26 @@ class TradingSystem:
             # Determine order type
             order_type = mt5.ORDER_TYPE_BUY if signal.direction == "BUY" else mt5.ORDER_TYPE_SELL
             
-            # Get current market price with enhanced retry and fallback
+            # FIXED: Get current market price with enhanced retry and ensure Market Watch selection
             symbol_info = self.get_symbol_info_with_retry(active_symbol)
             if symbol_info is None:
                 self.log(f"❌ Cannot get symbol info for {active_symbol} or any fallbacks", "ERROR")
                 return False
+            
+            # FIXED: Ensure symbol is properly selected in Market Watch before proceeding
+            if not symbol_info.visible:
+                self.log(f"Symbol {active_symbol} not visible in Market Watch, selecting now", "INFO")
+                if not mt5.symbol_select(active_symbol, True):
+                    self.log(f"❌ Failed to select {active_symbol} in Market Watch", "ERROR")
+                    return False
+                
+                # Re-verify symbol after selection
+                symbol_info = self.get_symbol_info_with_retry(active_symbol)
+                if symbol_info is None or not symbol_info.visible:
+                    self.log(f"❌ Symbol {active_symbol} still not properly available after Market Watch selection", "ERROR")
+                    return False
+                
+                self.log(f"✅ Successfully selected {active_symbol} in Market Watch", "INFO")
             
             # Enhanced tick data retrieval with retry
             tick = self._get_tick_data_with_retry(active_symbol)
@@ -3026,7 +3096,7 @@ class TradingSystem:
             # Enhanced order request with symbol validation
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": active_symbol,  # Use active symbol instead of original
+                "symbol": active_symbol,  # Use verified, case-correct active symbol
                 "volume": lot_size,
                 "type": order_type,
                 "price": price,
@@ -3039,6 +3109,7 @@ class TradingSystem:
             
             # Log order details for debugging
             self.log(f"📤 Sending order: {signal.direction} {lot_size} {active_symbol} @ {price:.5f}", "INFO")
+            self.log(f"   Symbol verified: visible={symbol_info.visible}, spread={symbol_info.spread if hasattr(symbol_info, 'spread') else 'N/A'}", "DEBUG")
             
             # Execute order with enhanced error handling
             result = self._execute_order_with_retry(request, max_attempts=3)
@@ -3309,19 +3380,20 @@ class TradingSystem:
             if self.filling_type is None:
                 self.filling_type = self.detect_broker_filling_type()
             
-            # Validate symbol with retry mechanism
-            symbol_info = self.get_symbol_info_with_retry(self.symbol)
+            # FIXED: Validate current symbol with retry mechanism
+            active_symbol = self.current_symbol
+            symbol_info = self.get_symbol_info_with_retry(active_symbol)
             if symbol_info is None:
-                raise ValidationError(f"Symbol {self.symbol} not available after retry")
+                raise ValidationError(f"Symbol {active_symbol} not available after retry")
             
             if not symbol_info.visible:
-                self.log(f"Making symbol {self.symbol} visible", "INFO")
-                if not mt5.symbol_select(self.symbol, True):
-                    raise ValidationError(f"Could not select symbol {self.symbol}")
+                self.log(f"Making symbol {active_symbol} visible", "INFO")
+                if not mt5.symbol_select(active_symbol, True):
+                    raise ValidationError(f"Could not select symbol {active_symbol}")
             
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": self.symbol,
+                "symbol": active_symbol,  # Use current active symbol
                 "volume": lot_size,
                 "type": order_type,
                 "deviation": 20,
