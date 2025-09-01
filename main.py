@@ -188,6 +188,7 @@ class TradingSystem:
         self.config = {
             "trading_parameters": {
                 "symbol": "XAUUSD.v",
+                "fallback_symbols": ["XAUUSD", "XAUUSD.V", "XAUUSD.v", "XAUUSD.c"],  # Fallback symbol list
                 "base_lot_size": 0.01,
                 "max_lot_size": 0.1,
                 "max_positions": 50,
@@ -215,6 +216,15 @@ class TradingSystem:
                 "max_positions_per_zone": 3,
                 "min_position_distance_pips": 15,
                 "force_zone_diversification": True
+            },
+            "symbol_management": {
+                "retry_attempts": 5,
+                "retry_delay_base": 0.5,
+                "retry_exponential_backoff": True,
+                "symbol_cache_ttl": 300,  # 5 minutes
+                "connection_timeout": 10,
+                "symbol_verification_enabled": True,
+                "fallback_enabled": True
             },
             "performance": {
                 "cache_enabled": True,
@@ -464,6 +474,81 @@ class TradingSystem:
         self.last_hedge_time = None  # Track last hedge execution time
         self.recent_volatility = 1.0  # Default volatility level
 
+        # 🔧 Enhanced Symbol Management System
+        self.current_symbol = self.symbol  # Currently active symbol
+        self.fallback_symbols = self.config["trading_parameters"]["fallback_symbols"]
+        self.symbol_cache = {}  # Cache for symbol info {symbol: {info: data, timestamp: time}}
+        self.symbol_cache_ttl = self.config["symbol_management"]["symbol_cache_ttl"]
+        self.last_symbol_verification = None
+        self.symbol_status = {}  # Track symbol availability status
+        
+        # Enhanced retry configuration
+        self.symbol_retry_attempts = self.config["symbol_management"]["retry_attempts"]
+        self.symbol_retry_delay_base = self.config["symbol_management"]["retry_delay_base"] 
+        self.symbol_retry_exponential_backoff = self.config["symbol_management"]["retry_exponential_backoff"]
+        
+        # Symbol operation statistics
+        self.symbol_operation_stats = {
+            'total_requests': 0,
+            'successful_requests': 0,
+            'failed_requests': 0,
+            'fallback_used': 0,
+            'cache_hits': 0,
+            'average_response_time': 0.0
+        }
+
+    def log_symbol_operation_status(self):
+        """Log comprehensive symbol operation status"""
+        try:
+            stats = self.get_symbol_operation_stats()
+            
+            self.log("📊 Symbol Operation Status Report:", "INFO")
+            self.log(f"  Current Symbol: {stats['current_symbol']}", "INFO")
+            self.log(f"  Success Rate: {stats['success_rate']:.1f}% ({stats['successful_requests']}/{stats['total_requests']})", "INFO")
+            self.log(f"  Cache Hit Rate: {stats['cache_hit_rate']:.1f}% ({stats['cache_hits']} hits)", "INFO")
+            self.log(f"  Fallback Usage: {stats['fallback_usage_rate']:.1f}% ({stats['fallback_used']} times)", "INFO")
+            self.log(f"  Average Response Time: {stats['average_response_time']:.3f}s", "INFO")
+            self.log(f"  Cache Size: {stats['symbol_cache_size']} entries", "INFO")
+            
+            # Log symbol availability status
+            if stats['symbols_status']:
+                self.log("  Symbol Status:", "INFO")
+                for symbol, status in stats['symbols_status'].items():
+                    available = "✅" if status['available'] else "❌"
+                    last_check = datetime.fromtimestamp(status['last_check']).strftime("%H:%M:%S")
+                    self.log(f"    {symbol}: {available} (checked at {last_check})", "INFO")
+                    
+        except Exception as e:
+            self.log(f"Error logging symbol operation status: {str(e)}", "ERROR")
+
+    def periodic_symbol_health_check(self):
+        """Perform periodic symbol health check"""
+        try:
+            current_time = datetime.now()
+            
+            # Check if it's time for symbol verification (every 5 minutes)
+            if (self.last_symbol_verification is None or 
+                (current_time - self.last_symbol_verification).seconds >= 300):
+                
+                self.log("🔍 Performing periodic symbol health check...", "INFO")
+                symbol_status = self.verify_all_symbols()
+                
+                # Count available symbols
+                available_count = sum(1 for available in symbol_status.values() if available)
+                total_count = len(symbol_status)
+                
+                if available_count == 0:
+                    self.log("🚨 No symbols are available! Check broker connection.", "ERROR")
+                elif available_count < total_count:
+                    self.log(f"⚠️ {available_count}/{total_count} symbols available", "WARNING")
+                else:
+                    self.log(f"✅ All {total_count} symbols are available", "INFO")
+                
+                self.last_symbol_verification = current_time
+                
+        except Exception as e:
+            self.log(f"Error in periodic symbol health check: {str(e)}", "ERROR")
+
     def log(self, message: str, level: str = "INFO"):
         """Thread-safe logging"""
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -477,34 +562,90 @@ class TradingSystem:
         else:
             logger.info(message)
 
-    def get_symbol_info_with_retry(self, symbol: str, max_retries: int = 3, retry_delay: float = 0.5) -> Optional[Any]:
-        """Get symbol info with retry mechanism and symbol validation"""
+    def get_symbol_info_with_retry(self, symbol: str, max_retries: int = None, retry_delay: float = None) -> Optional[Any]:
+        """Enhanced symbol info retrieval with fallback mechanisms and caching"""
+        start_time = time.time()
+        
         if not MT5_AVAILABLE or not self.mt5_connected:
             return None
+        
+        # Use config values if not provided
+        if max_retries is None:
+            max_retries = self.symbol_retry_attempts
+        if retry_delay is None:
+            retry_delay = self.symbol_retry_delay_base
             
-        # Normalize symbol case (handle XAUUSD.V vs XAUUSD.v issues)
+        self.symbol_operation_stats['total_requests'] += 1
+        
+        # Check cache first
+        cached_result = self._get_cached_symbol_info(symbol)
+        if cached_result is not None:
+            self.symbol_operation_stats['cache_hits'] += 1
+            self.symbol_operation_stats['successful_requests'] += 1
+            return cached_result
+        
+        # Try primary symbol and fallbacks
+        symbols_to_try = [symbol] + [s for s in self.fallback_symbols if s != symbol]
+        
+        for symbol_attempt in symbols_to_try:
+            result = self._attempt_symbol_info_retrieval(symbol_attempt, max_retries, retry_delay)
+            if result is not None:
+                # Cache successful result
+                self._cache_symbol_info(symbol_attempt, result)
+                
+                # Update current symbol if fallback was used
+                if symbol_attempt != symbol:
+                    self.log(f"✅ Using fallback symbol: {symbol_attempt} (requested: {symbol})", "INFO")
+                    self.current_symbol = symbol_attempt
+                    self.symbol_operation_stats['fallback_used'] += 1
+                
+                self.symbol_operation_stats['successful_requests'] += 1
+                response_time = time.time() - start_time
+                self._update_average_response_time(response_time)
+                return result
+        
+        # All attempts failed
+        self.symbol_operation_stats['failed_requests'] += 1
+        self.log(f"❌ Failed to get symbol info for {symbol} and all fallbacks after {max_retries} attempts each", "ERROR")
+        return None
+
+    def _attempt_symbol_info_retrieval(self, symbol: str, max_retries: int, retry_delay: float) -> Optional[Any]:
+        """Attempt to retrieve symbol info with retry logic"""
         normalized_symbol = symbol.upper()
         
         for attempt in range(max_retries):
             try:
+                # Enhanced connection health check
+                if not self._verify_symbol_availability(normalized_symbol):
+                    self.log(f"Symbol {normalized_symbol} not available on broker (attempt {attempt + 1})", "WARNING")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        if self.symbol_retry_exponential_backoff:
+                            retry_delay *= 1.5
+                        continue
+                    return None
+                
                 # Check connection health before attempting
                 if not self.check_mt5_connection_health():
                     self.log(f"MT5 connection health check failed before symbol info request (attempt {attempt + 1})", "WARNING")
                     if attempt < max_retries - 1:
                         time.sleep(retry_delay)
-                        retry_delay *= 1.5  # Exponential backoff
+                        if self.symbol_retry_exponential_backoff:
+                            retry_delay *= 1.5
                         continue
                     return None
                 
                 # Try normalized symbol first
                 symbol_info = mt5.symbol_info(normalized_symbol)
                 if symbol_info is not None:
+                    self.log(f"✅ Successfully retrieved symbol info for {normalized_symbol}", "DEBUG")
                     return symbol_info
                 
                 # If normalized fails, try original symbol
                 if normalized_symbol != symbol:
                     symbol_info = mt5.symbol_info(symbol)
                     if symbol_info is not None:
+                        self.log(f"✅ Successfully retrieved symbol info for {symbol} (original case)", "DEBUG")
                         return symbol_info
                 
                 # Log attempt failure
@@ -512,19 +653,137 @@ class TradingSystem:
                 
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
-                    retry_delay *= 1.5  # Exponential backoff
+                    if self.symbol_retry_exponential_backoff:
+                        retry_delay *= 1.5
                     
             except Exception as e:
                 self.log(f"Exception getting symbol info for {symbol} (attempt {attempt + 1}): {str(e)}", "ERROR")
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
-                    retry_delay *= 1.5
+                    if self.symbol_retry_exponential_backoff:
+                        retry_delay *= 1.5
                     
-        self.log(f"❌ Failed to get symbol info for {symbol} after {max_retries} attempts", "ERROR")
         return None
 
+    def _get_cached_symbol_info(self, symbol: str) -> Optional[Any]:
+        """Get symbol info from cache if available and valid"""
+        if symbol not in self.symbol_cache:
+            return None
+        
+        cache_entry = self.symbol_cache[symbol]
+        cache_age = time.time() - cache_entry['timestamp']
+        
+        if cache_age < self.symbol_cache_ttl:
+            self.log(f"📋 Using cached symbol info for {symbol} (age: {cache_age:.1f}s)", "DEBUG")
+            return cache_entry['info']
+        else:
+            # Cache expired, remove entry
+            del self.symbol_cache[symbol]
+            return None
+
+    def _cache_symbol_info(self, symbol: str, symbol_info: Any):
+        """Cache symbol info with timestamp"""
+        self.symbol_cache[symbol] = {
+            'info': symbol_info,
+            'timestamp': time.time()
+        }
+        self.log(f"📋 Cached symbol info for {symbol}", "DEBUG")
+
+    def _verify_symbol_availability(self, symbol: str) -> bool:
+        """Verify if symbol is available on the broker"""
+        try:
+            if not MT5_AVAILABLE or not self.mt5_connected:
+                return False
+            
+            # Check if symbol exists in symbols list
+            symbols = mt5.symbols_get(symbol)
+            if symbols is None or len(symbols) == 0:
+                self.symbol_status[symbol] = {'available': False, 'last_check': time.time()}
+                return False
+            
+            # Additional check for symbol visibility
+            symbol_info = mt5.symbol_info(symbol)
+            if symbol_info is None:
+                self.symbol_status[symbol] = {'available': False, 'last_check': time.time()}
+                return False
+            
+            # Check if symbol is enabled for trading
+            if hasattr(symbol_info, 'visible') and not symbol_info.visible:
+                self.log(f"Symbol {symbol} exists but is not visible", "WARNING")
+                self.symbol_status[symbol] = {'available': False, 'last_check': time.time()}
+                return False
+            
+            self.symbol_status[symbol] = {'available': True, 'last_check': time.time()}
+            return True
+            
+        except Exception as e:
+            self.log(f"Error verifying symbol availability for {symbol}: {str(e)}", "ERROR")
+            return False
+
+    def _update_average_response_time(self, response_time: float):
+        """Update average response time statistics"""
+        current_avg = self.symbol_operation_stats['average_response_time']
+        total_requests = self.symbol_operation_stats['successful_requests']
+        
+        if total_requests == 1:
+            self.symbol_operation_stats['average_response_time'] = response_time
+        else:
+            # Calculate running average
+            new_avg = ((current_avg * (total_requests - 1)) + response_time) / total_requests
+            self.symbol_operation_stats['average_response_time'] = new_avg
+
+    def get_symbol_operation_stats(self) -> Dict[str, Any]:
+        """Get comprehensive symbol operation statistics"""
+        stats = self.symbol_operation_stats.copy()
+        
+        # Calculate success rate
+        total_requests = stats['total_requests']
+        if total_requests > 0:
+            stats['success_rate'] = (stats['successful_requests'] / total_requests) * 100
+            stats['failure_rate'] = (stats['failed_requests'] / total_requests) * 100
+            stats['cache_hit_rate'] = (stats['cache_hits'] / total_requests) * 100
+            stats['fallback_usage_rate'] = (stats['fallback_used'] / total_requests) * 100
+        else:
+            stats['success_rate'] = 0
+            stats['failure_rate'] = 0
+            stats['cache_hit_rate'] = 0
+            stats['fallback_usage_rate'] = 0
+        
+        # Add current symbol status
+        stats['current_symbol'] = self.current_symbol
+        stats['symbol_cache_size'] = len(self.symbol_cache)
+        stats['symbols_status'] = self.symbol_status.copy()
+        
+        return stats
+
+    def clear_symbol_cache(self):
+        """Clear symbol info cache"""
+        cache_size = len(self.symbol_cache)
+        self.symbol_cache.clear()
+        self.symbol_status.clear()
+        self.log(f"🗑️ Cleared symbol cache ({cache_size} entries)", "INFO")
+
+    def verify_all_symbols(self) -> Dict[str, bool]:
+        """Verify availability of all configured symbols"""
+        results = {}
+        symbols_to_check = [self.symbol] + self.fallback_symbols
+        
+        self.log("🔍 Verifying symbol availability...", "INFO")
+        
+        for symbol in symbols_to_check:
+            try:
+                is_available = self._verify_symbol_availability(symbol)
+                results[symbol] = is_available
+                status = "✅ Available" if is_available else "❌ Not Available"
+                self.log(f"  {symbol}: {status}", "INFO")
+            except Exception as e:
+                results[symbol] = False
+                self.log(f"  {symbol}: ❌ Error - {str(e)}", "ERROR")
+        
+        return results
+
     def detect_broker_filling_type(self) -> int:
-        """Auto-detect broker's supported filling type"""
+        """Auto-detect broker's supported filling type with enhanced symbol validation"""
         if not MT5_AVAILABLE:
             self.log("MT5 not available - using mock filling type", "WARNING")
             return 0  # Mock value
@@ -533,11 +792,21 @@ class TradingSystem:
             return mt5.ORDER_FILLING_IOC
             
         try:
-            # Get symbol info to check filling modes with retry
-            symbol_info = self.get_symbol_info_with_retry(self.symbol)
+            # Get symbol info to check filling modes with enhanced retry
+            symbol_info = self.get_symbol_info_with_retry(self.current_symbol)
             if symbol_info is None:
-                self.log(f"Cannot get symbol info for {self.symbol}", "WARNING")
-                return mt5.ORDER_FILLING_IOC
+                self.log(f"Cannot get symbol info for {self.current_symbol}, trying fallbacks", "WARNING")
+                
+                # Try fallback symbols for filling type detection
+                for fallback_symbol in self.fallback_symbols:
+                    symbol_info = self.get_symbol_info_with_retry(fallback_symbol)
+                    if symbol_info is not None:
+                        self.log(f"Using {fallback_symbol} for filling type detection", "INFO")
+                        break
+                
+                if symbol_info is None:
+                    self.log("Cannot get symbol info for any symbol", "WARNING")
+                    return mt5.ORDER_FILLING_IOC
             
             filling_modes = symbol_info.filling_mode
             
@@ -953,8 +1222,8 @@ class TradingSystem:
         self.log("All MT5 connection attempts failed", "ERROR")
         return False
     
-    def check_mt5_connection_health(self) -> bool:
-        """Check MT5 connection health with circuit breaker logic"""
+    def check_mt5_connection_health(self, include_symbol_check: bool = True) -> bool:
+        """Enhanced MT5 connection health check with optional symbol verification"""
         try:
             # If circuit breaker is open, check if timeout has passed
             if self.circuit_breaker_open:
@@ -989,6 +1258,13 @@ class TradingSystem:
                 self._handle_connection_failure()
                 return False
             
+            # Enhanced symbol-specific health check
+            if include_symbol_check and self.config["symbol_management"]["symbol_verification_enabled"]:
+                if not self._perform_symbol_health_check():
+                    self.log("Symbol health check failed", "WARNING")
+                    # Don't fail the entire connection for symbol issues
+                    # Just log the warning and continue
+            
             # Health check passed
             self.last_mt5_ping = datetime.now()
             self.connection_failures = 0
@@ -997,6 +1273,29 @@ class TradingSystem:
         except Exception as e:
             self.log(f"MT5 health check error: {str(e)}", "ERROR")
             self._handle_connection_failure()
+            return False
+
+    def _perform_symbol_health_check(self) -> bool:
+        """Perform health check specifically for symbol operations"""
+        try:
+            # Check if current symbol is still available
+            if not self._verify_symbol_availability(self.current_symbol):
+                self.log(f"Current symbol {self.current_symbol} no longer available", "WARNING")
+                
+                # Try to find an available fallback
+                for fallback_symbol in self.fallback_symbols:
+                    if self._verify_symbol_availability(fallback_symbol):
+                        self.log(f"Switching to fallback symbol: {fallback_symbol}", "INFO")
+                        self.current_symbol = fallback_symbol
+                        return True
+                
+                self.log("No available fallback symbols found", "ERROR")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            self.log(f"Symbol health check error: {str(e)}", "ERROR")
             return False
     
     def _handle_connection_failure(self):
@@ -1139,15 +1438,31 @@ class TradingSystem:
             return 1.0
 
     def get_market_data(self) -> Optional[DataFrame]:
-        """Get recent market data for analysis"""
+        """Get recent market data for analysis using current active symbol"""
         if not self.mt5_connected:
             return None
             
         try:
+            # Use current active symbol (may be fallback)
+            active_symbol = self.current_symbol
+            
             # Get last 15 M5 candles (เพิ่มจาก 10)
-            rates = mt5.copy_rates_from_pos(self.symbol, mt5.TIMEFRAME_M5, 0, 15)
+            rates = mt5.copy_rates_from_pos(active_symbol, mt5.TIMEFRAME_M5, 0, 15)
             if rates is None or len(rates) < 5:
-                return None
+                self.log(f"Failed to get market data for {active_symbol}, trying fallbacks", "WARNING")
+                
+                # Try fallback symbols for market data
+                for fallback_symbol in self.fallback_symbols:
+                    if fallback_symbol != active_symbol:
+                        rates = mt5.copy_rates_from_pos(fallback_symbol, mt5.TIMEFRAME_M5, 0, 15)
+                        if rates is not None and len(rates) >= 5:
+                            self.log(f"Using market data from fallback symbol: {fallback_symbol}", "INFO")
+                            # Update current symbol if fallback works
+                            self.current_symbol = fallback_symbol
+                            break
+                
+                if rates is None or len(rates) < 5:
+                    return None
                 
             df = pd.DataFrame(rates)
             df['time'] = pd.to_datetime(df['time'], unit='s')
@@ -2348,7 +2663,9 @@ class TradingSystem:
             return False
 
     def execute_normal_order_v2(self, signal: Signal, lot_size: float, decision_details: dict) -> bool:
-        """🚀 Enhanced normal order execution with unified lot size"""
+        """🚀 Enhanced normal order execution with improved symbol management and error handling"""
+        start_time = time.time()
+        
         try:
             # Validate lot size
             lot_size = self._validate_lot_size(lot_size)
@@ -2357,46 +2674,64 @@ class TradingSystem:
                 self.log("❌ MT5 not connected for order execution", "ERROR")
                 return False
             
+            # Enhanced connection and symbol health check
+            if not self.check_mt5_connection_health(include_symbol_check=True):
+                self.log("❌ MT5 connection or symbol health check failed", "ERROR")
+                return False
+            
+            # Use current active symbol (may be fallback)
+            active_symbol = self.current_symbol
+            self.log(f"📊 Executing order for {active_symbol} (originally {signal.symbol})", "DEBUG")
+            
             # Determine order type
             order_type = mt5.ORDER_TYPE_BUY if signal.direction == "BUY" else mt5.ORDER_TYPE_SELL
             
-            # Get current market price with retry
-            symbol_info = self.get_symbol_info_with_retry(signal.symbol)
+            # Get current market price with enhanced retry and fallback
+            symbol_info = self.get_symbol_info_with_retry(active_symbol)
             if symbol_info is None:
-                self.log(f"❌ Cannot get symbol info for {signal.symbol}", "ERROR")
+                self.log(f"❌ Cannot get symbol info for {active_symbol} or any fallbacks", "ERROR")
                 return False
             
-            # Get current tick
-            tick = mt5.symbol_info_tick(signal.symbol)
+            # Enhanced tick data retrieval with retry
+            tick = self._get_tick_data_with_retry(active_symbol)
             if tick is None:
-                self.log(f"❌ Cannot get tick data for {signal.symbol}", "ERROR")
+                self.log(f"❌ Cannot get tick data for {active_symbol}", "ERROR")
                 return False
             
-            # Set price based on signal direction
+            # Set price based on signal direction with enhanced validation
             if signal.direction == "BUY":
                 price = tick.ask
+                if price <= 0:
+                    self.log(f"❌ Invalid ask price: {price}", "ERROR")
+                    return False
             else:
                 price = tick.bid
+                if price <= 0:
+                    self.log(f"❌ Invalid bid price: {price}", "ERROR")
+                    return False
             
-            # Create order request
+            # Enhanced order request with symbol validation
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": signal.symbol,
+                "symbol": active_symbol,  # Use active symbol instead of original
                 "volume": lot_size,
                 "type": order_type,
                 "price": price,
-                "deviation": 10,  # Allow 10 points price deviation
+                "deviation": 20,  # Increased deviation for better execution
                 "magic": 234000,
-                "comment": f"v2.0-{signal.reason[:30]}",  # Include unified decision info
+                "comment": f"v2.0-{signal.reason[:30]}",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": self.filling_type or mt5.ORDER_FILLING_IOC,
             }
             
-            # Execute order
-            result = mt5.order_send(request)
+            # Log order details for debugging
+            self.log(f"📤 Sending order: {signal.direction} {lot_size} {active_symbol} @ {price:.5f}", "INFO")
+            
+            # Execute order with enhanced error handling
+            result = self._execute_order_with_retry(request, max_attempts=3)
             
             if result is None:
-                self.log("❌ Order send failed - no result", "ERROR")
+                self.log("❌ Order execution failed after all attempts", "ERROR")
                 return False
             
             if result.retcode != mt5.TRADE_RETCODE_DONE:
@@ -7856,6 +8191,122 @@ class TradingSystem:
         except Exception as e:
             self.log(f"Error getting smart HG analytics: {str(e)}", "ERROR")
             return {}
+
+    def _get_tick_data_with_retry(self, symbol: str, max_attempts: int = 3) -> Optional[Any]:
+        """Get tick data with retry mechanism"""
+        for attempt in range(max_attempts):
+            try:
+                tick = mt5.symbol_info_tick(symbol)
+                if tick is not None:
+                    return tick
+                
+                self.log(f"Tick data request failed for {symbol} (attempt {attempt + 1})", "WARNING")
+                if attempt < max_attempts - 1:
+                    time.sleep(0.1)  # Short delay between attempts
+                    
+            except Exception as e:
+                self.log(f"Exception getting tick data for {symbol} (attempt {attempt + 1}): {str(e)}", "ERROR")
+                if attempt < max_attempts - 1:
+                    time.sleep(0.1)
+        
+        return None
+
+    def _execute_order_with_retry(self, request: dict, max_attempts: int = 3) -> Optional[Any]:
+        """Execute order with retry mechanism for transient failures"""
+        for attempt in range(max_attempts):
+            try:
+                result = mt5.order_send(request)
+                
+                if result is None:
+                    self.log(f"Order send returned None (attempt {attempt + 1})", "WARNING")
+                    if attempt < max_attempts - 1:
+                        time.sleep(0.5)  # Wait before retry
+                        continue
+                    return None
+                
+                # Check for transient errors that can be retried
+                if result.retcode in [
+                    mt5.TRADE_RETCODE_REQUOTE,     # Requote
+                    mt5.TRADE_RETCODE_TIMEOUT,     # Timeout  
+                    mt5.TRADE_RETCODE_PRICE_CHANGED, # Price changed
+                    mt5.TRADE_RETCODE_CONNECTION,   # Connection issues
+                ]:
+                    self.log(f"Transient error {result.retcode}, retrying (attempt {attempt + 1})", "WARNING")
+                    if attempt < max_attempts - 1:
+                        # Update price for retry
+                        tick = self._get_tick_data_with_retry(request["symbol"])
+                        if tick is not None:
+                            if request["type"] == mt5.ORDER_TYPE_BUY:
+                                request["price"] = tick.ask
+                            else:
+                                request["price"] = tick.bid
+                        time.sleep(0.5)
+                        continue
+                
+                return result
+                
+            except Exception as e:
+                self.log(f"Exception during order execution (attempt {attempt + 1}): {str(e)}", "ERROR")
+                if attempt < max_attempts - 1:
+                    time.sleep(0.5)
+        
+        return None
+
+    def integrated_symbol_monitoring(self):
+        """Integrated symbol monitoring for the trading loop"""
+        try:
+            # Perform periodic symbol health check (every 5 minutes)
+            self.periodic_symbol_health_check()
+            
+            # Log symbol statistics every 30 successful operations or every hour
+            if (self.symbol_operation_stats['successful_requests'] > 0 and 
+                self.symbol_operation_stats['successful_requests'] % 30 == 0):
+                self.log_symbol_operation_status()
+            
+            # Clear old cache entries periodically
+            current_time = time.time()
+            expired_symbols = []
+            for symbol, cache_entry in self.symbol_cache.items():
+                if current_time - cache_entry['timestamp'] > self.symbol_cache_ttl:
+                    expired_symbols.append(symbol)
+            
+            for symbol in expired_symbols:
+                del self.symbol_cache[symbol]
+                
+            if expired_symbols:
+                self.log(f"🧹 Cleaned {len(expired_symbols)} expired cache entries", "DEBUG")
+                
+        except Exception as e:
+            self.log(f"Error in integrated symbol monitoring: {str(e)}", "ERROR")
+
+    def get_enhanced_system_status(self) -> Dict[str, Any]:
+        """Get comprehensive system status including symbol management"""
+        try:
+            base_status = {
+                'mt5_connected': self.mt5_connected,
+                'trading_active': self.trading_active,
+                'current_symbol': self.current_symbol,
+                'total_positions': len(self.positions),
+                'buy_volume': self.buy_volume,
+                'sell_volume': self.sell_volume,
+                'portfolio_health': self.portfolio_health
+            }
+            
+            # Add symbol operation statistics
+            symbol_stats = self.get_symbol_operation_stats()
+            base_status['symbol_management'] = {
+                'success_rate': symbol_stats['success_rate'],
+                'cache_hit_rate': symbol_stats['cache_hit_rate'],
+                'fallback_usage': symbol_stats['fallback_usage_rate'],
+                'avg_response_time': symbol_stats['average_response_time'],
+                'available_symbols': sum(1 for status in symbol_stats['symbols_status'].values() if status['available'])
+            }
+            
+            return base_status
+            
+        except Exception as e:
+            self.log(f"Error getting enhanced system status: {str(e)}", "ERROR")
+            return {'error': str(e)}
 
 class TradingGUI:
     def __init__(self):
