@@ -2853,12 +2853,7 @@ class TradingSystem:
                     except Exception as health_error:
                         self.log(f"Health check error: {str(health_error)}", "ERROR")
                 
-                # 📅 Daily Reset Check (check every cycle for immediate response)
-                try:
-                    self.check_and_reset_daily_counters()
-                except Exception as reset_error:
-                    self.log(f"Daily reset check error: {str(reset_error)}", "ERROR")
-                
+
                 # 🔗 Connection Health Check
                 if (datetime.now() - last_connection_check).seconds >= self.connection_check_interval:
                     if not self.check_mt5_connection_health():
@@ -4234,25 +4229,16 @@ class TradingSystem:
                 if os.path.exists(backup_file):
                     self.log(f"📝 Main state file not found, trying backup: {backup_file}")
                     success = self._load_state_from_file(backup_file)
-                    if success:
-                        # Check and reset daily counters after successful loading
-                        self.check_and_reset_daily_counters()
                     return success
                 elif os.path.exists(old_backup):
                     self.log(f"📝 Trying old backup: {old_backup}")
                     success = self._load_state_from_file(old_backup)
-                    if success:
-                        # Check and reset daily counters after successful loading
-                        self.check_and_reset_daily_counters()
                     return success
                 else:
                     self.log(f"📝 No previous state found ({self.state_file})")
                     return False
             
             success = self._load_state_from_file(self.state_file)
-            if success:
-                # Check and reset daily counters after successful loading
-                self.check_and_reset_daily_counters()
             return success
             
         except Exception as e:
@@ -4264,9 +4250,6 @@ class TradingSystem:
                     try:
                         self.log(f"🔄 Attempting recovery from {backup_file}")
                         success = self._load_state_from_file(backup_file)
-                        if success:
-                            # Check and reset daily counters after successful backup loading
-                            self.check_and_reset_daily_counters()
                         return success
                     except Exception as backup_error:
                         self.log(f"❌ Backup recovery failed: {backup_error}", "ERROR")
@@ -4743,7 +4726,7 @@ class TradingSystem:
             
             # Validate numeric fields
             numeric_fields = [
-                'daily_trades', 'total_signals', 'successful_signals',
+                'total_signals', 'successful_signals',
                 'total_redirects', 'successful_redirects', 'redirect_profit_captured',
                 'total_pair_closes', 'successful_pair_closes', 'pair_profit_captured',
                 'total_group_closes', 'group_profit_captured', 'portfolio_health',
