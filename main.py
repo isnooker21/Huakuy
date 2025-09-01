@@ -2396,6 +2396,13 @@ class TradingSystem:
             # Calculate portfolio health
             self.calculate_portfolio_health()
             
+            # 🚀 Performance: Invalidate zone analysis cache when positions update
+            if hasattr(self, 'zone_analysis_cache') and self.zone_analysis_cache:
+                # Clear cache to ensure fresh analysis after position changes
+                self.zone_analysis_cache = None
+                self.zone_analysis_cache_time = None
+                self.zone_analysis_cache_positions_hash = None
+            
         except Exception as e:
             self.log(f"Error updating positions: {str(e)}", "ERROR")
 
