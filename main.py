@@ -251,17 +251,7 @@ class TradingSystem:
                 "max_execution_time_ms": 50
             },
             "order_execution": {
-                "max_retry_attempts": 3,  # Increased from 2 to 3 for better success rate
-                "base_retry_delay": 0.3,  # Reduced from 0.5 for faster execution
-                "max_retry_delay": 3.0,   # Reduced from 8.0 for faster execution
-                "exponential_backoff": True,
-                "price_staleness_threshold": 15.0,  # Increased threshold for volatile markets
-                "price_deviation_threshold": 3.0,   # Increased from 2.0% to 3.0% for less strict validation
-                "connection_health_check_on_retry": False,  # Removed complex connection health checks
-                "validation_enabled": True,
-                "execution_timeout": 15.0,  # Reduced from 30.0 seconds for faster execution
-                "detailed_logging": False,  # Disabled extensive logging to improve performance
-                "magic_number": 234000  # Single magic number for all orders
+                "magic_number": 234000  # Simple magic number for all orders
             }
         }
         
@@ -536,13 +526,9 @@ class TradingSystem:
             'average_response_time': 0.0
         }
         
-        # Configure logging level based on detailed_logging setting
-        if self.config["order_execution"]["detailed_logging"]:
-            logging.getLogger().setLevel(logging.DEBUG)
-            logger.setLevel(logging.DEBUG)
-        else:
-            logging.getLogger().setLevel(logging.INFO)
-            logger.setLevel(logging.INFO)
+        # Simple logging configuration
+        logging.getLogger().setLevel(logging.INFO)
+        logger.setLevel(logging.INFO)
 
     def log_symbol_operation_status(self):
         """Log comprehensive symbol operation status"""
@@ -618,9 +604,8 @@ class TradingSystem:
         elif level == "WARNING":
             logger.warning(message)
         elif level == "DEBUG":
-            # Only log DEBUG messages if detailed logging is enabled
-            if self.config["order_execution"]["detailed_logging"]:
-                logger.debug(message)
+            # Simple debug logging
+            logger.debug(message)
         else:
             logger.info(message)
 
@@ -3037,116 +3022,70 @@ class TradingSystem:
             return False
 
     def execute_normal_order_v2(self, signal: Signal, lot_size: float, decision_details: dict) -> bool:
-        """🚀 Enhanced normal order execution with improved symbol management and error handling"""
-        start_time = time.time()
-        
+        """Execute normal order with direct MT5 order sending (v2)"""
         try:
-            # Validate lot size
-            lot_size = self._validate_lot_size(lot_size)
+            # Basic validation
+            if lot_size <= 0:
+                self.log(f"Invalid lot size: {lot_size}", "ERROR")
+                return False
             
             if not self.mt5_connected:
-                self.log("❌ MT5 not connected for order execution", "ERROR")
+                self.log("MT5 not connected", "ERROR")
                 return False
             
-            # Enhanced connection and symbol health check
-            if not self.check_mt5_connection_health(include_symbol_check=True):
-                self.log("❌ MT5 connection or symbol health check failed", "ERROR")
-                return False
-            
-            # Use current active symbol (may be fallback)
+            # Use current active symbol
             active_symbol = self.current_symbol
-            self.log(f"📊 Executing order for {active_symbol} (originally {signal.symbol})", "DEBUG")
             
             # Determine order type
             order_type = mt5.ORDER_TYPE_BUY if signal.direction == "BUY" else mt5.ORDER_TYPE_SELL
             
-            # FIXED: Get current market price with enhanced retry and ensure Market Watch selection
-            symbol_info = self.get_symbol_info_with_retry(active_symbol)
-            if symbol_info is None:
-                self.log(f"❌ Cannot get symbol info for {active_symbol} or any fallbacks", "ERROR")
-                return False
-            
-            # FIXED: Ensure symbol is properly selected in Market Watch before proceeding
-            if not symbol_info.visible:
-                self.log(f"Symbol {active_symbol} not visible in Market Watch, selecting now", "INFO")
-                if not mt5.symbol_select(active_symbol, True):
-                    self.log(f"❌ Failed to select {active_symbol} in Market Watch", "ERROR")
-                    return False
-                
-                # Re-verify symbol after selection
-                symbol_info = self.get_symbol_info_with_retry(active_symbol)
-                if symbol_info is None or not symbol_info.visible:
-                    self.log(f"❌ Symbol {active_symbol} still not properly available after Market Watch selection", "ERROR")
-                    return False
-                
-                self.log(f"✅ Successfully selected {active_symbol} in Market Watch", "INFO")
-            
-            # Enhanced tick data retrieval with retry
-            tick = self._get_tick_data_with_retry(active_symbol)
+            # Get current price
+            tick = mt5.symbol_info_tick(active_symbol)
             if tick is None:
-                self.log(f"❌ Cannot get tick data for {active_symbol}", "ERROR")
+                self.log(f"Cannot get price for {active_symbol}", "ERROR")
                 return False
             
-            # Set price based on signal direction with enhanced validation
-            if signal.direction == "BUY":
-                price = tick.ask
-                if price <= 0:
-                    self.log(f"❌ Invalid ask price: {price}", "ERROR")
-                    return False
-            else:
-                price = tick.bid
-                if price <= 0:
-                    self.log(f"❌ Invalid bid price: {price}", "ERROR")
-                    return False
+            price = tick.ask if signal.direction == "BUY" else tick.bid
             
-            # Enhanced order request with symbol validation
+            # Simple order request
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": active_symbol,  # Use verified, case-correct active symbol
+                "symbol": active_symbol,
                 "volume": lot_size,
                 "type": order_type,
                 "price": price,
-                "deviation": 20,  # Increased deviation for better execution
-                "magic": 234000,
-                "comment": f"v2.0-{signal.reason[:30]}",
+                "deviation": 20,
+                "magic": 234000,  # Simple magic number parameter
+                "comment": f"AI_v2_{signal.direction}",
                 "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": self.filling_type or mt5.ORDER_FILLING_IOC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
             }
             
-            # Log order details for debugging
-            self.log(f"📤 Preparing order: {signal.direction} {lot_size} {active_symbol} @ {price:.5f}", "INFO")
-            self.log(f"   Symbol verified: visible={symbol_info.visible}, spread={symbol_info.spread if hasattr(symbol_info, 'spread') else 'N/A'}", "DEBUG")
+            # Log order details
+            self.log(f"Sending order: {signal.direction} {lot_size} {active_symbol} @ {price}", "INFO")
             
-            # Comprehensive pre-order validation
-            validation_start = time.time()
-            is_valid, validation_msg = self._validate_order_prerequisites(request)
-            validation_time = (time.time() - validation_start) * 1000
-            
-            if not is_valid:
-                self.log(f"❌ Order validation failed: {validation_msg} (validation took {validation_time:.1f}ms)", "ERROR")
-                return False
-            
-            self.log(f"✅ Order validation passed (took {validation_time:.1f}ms)", "DEBUG")
-            
-            # Execute order with enhanced error handling
-            result = self._execute_order_with_retry(request)  # Use default config settings
+            # Direct order send - let MT5 handle validation
+            result = mt5.order_send(request)
             
             if result is None:
-                execution_time = (time.time() - start_time) * 1000
-                self.log(f"❌ Order execution failed after all attempts (total time: {execution_time:.1f}ms)", "ERROR")
+                self.log("Order send returned None", "ERROR")
                 return False
             
-            if result.retcode != mt5.TRADE_RETCODE_DONE:
+            # Check result
+            if result.retcode == mt5.TRADE_RETCODE_DONE:
+                confidence = decision_details.get('confidence', 0.0)
+                
+                self.log(f"Order executed: {signal.direction} {lot_size:.2f} lots at {price:.5f}")
+                self.log(f"Ticket: {result.order}, Confidence: {confidence:.1%}")
+                return True
+            else:
                 error_desc = self._get_trade_error_description(result.retcode)
-                self.log(f"❌ Order failed: {error_desc} (code: {result.retcode})", "ERROR")
+                self.log(f"Order failed: {error_desc} (code: {result.retcode})", "ERROR")
                 return False
             
-            # Log successful execution with enhanced details
-            confidence = decision_details.get('confidence', 0.0)
-            exec_time = decision_details.get('execution_time_ms', 0.0)
-            
-            self.log(f"✅ Order executed: {signal.direction} {lot_size:.2f} lots at {price:.5f}")
-            self.log(f"   Ticket: {result.order}, Confidence: {confidence:.1%}, Decision time: {exec_time:.1f}ms")
+        except Exception as e:
+            self.log(f"Error executing order v2: {str(e)}", "ERROR")
+            return False
             
             # Update statistics
             self.total_signals += 1
@@ -3368,110 +3307,82 @@ class TradingSystem:
             return self.config["trading_parameters"]["base_lot_size"]
 
     def execute_normal_order(self, signal: Signal) -> bool:
-        """Execute normal market order with comprehensive validation"""
+        """Execute normal market order with direct MT5 order sending"""
         try:
-            # Input validation
+            # Basic input validation
             if not isinstance(signal, Signal):
-                raise ValidationError(f"Signal must be Signal object, got {type(signal)}")
+                self.log(f"Invalid signal type: {type(signal)}", "ERROR")
+                return False
             
-            # Connection validation with health check
+            # Check MT5 connection
             if not self.mt5_connected:
-                raise ValidationError("MT5 not connected")
-                
-            if not self.check_mt5_connection_health():
-                raise ValidationError("MT5 connection health check failed")
-                
-            if self.circuit_breaker_open:
-                raise ValidationError("Circuit breaker is open")
+                self.log("MT5 not connected", "ERROR")
+                return False
             
-            # Calculate and validate lot size
+            # Calculate lot size
             lot_size = self.calculate_lot_size(signal)
-            lot_size = InputValidator.validate_volume(lot_size)
+            if lot_size <= 0:
+                self.log(f"Invalid lot size: {lot_size}", "ERROR")
+                return False
             
-            # Validate order type
+            # Determine order type
             if signal.direction not in ['BUY', 'SELL']:
-                raise ValidationError(f"Invalid signal direction: {signal.direction}")
+                self.log(f"Invalid signal direction: {signal.direction}", "ERROR")
+                return False
                 
             order_type = mt5.ORDER_TYPE_BUY if signal.direction == 'BUY' else mt5.ORDER_TYPE_SELL
             
-            # Ensure we have a valid filling type
-            if self.filling_type is None:
-                self.filling_type = self.detect_broker_filling_type()
-            
-            # FIXED: Validate current symbol with retry mechanism
+            # Get current symbol and price
             active_symbol = self.current_symbol
-            symbol_info = self.get_symbol_info_with_retry(active_symbol)
-            if symbol_info is None:
-                raise ValidationError(f"Symbol {active_symbol} not available after retry")
-            
-            if not symbol_info.visible:
-                self.log(f"Making symbol {active_symbol} visible", "INFO")
-                if not mt5.symbol_select(active_symbol, True):
-                    raise ValidationError(f"Could not select symbol {active_symbol}")
-            
-            # Get current market price for order
-            tick = self._get_tick_data_with_retry(active_symbol)
+            tick = mt5.symbol_info_tick(active_symbol)
             if tick is None:
-                raise ValidationError(f"Cannot get tick data for {active_symbol}")
+                self.log(f"Cannot get price for {active_symbol}", "ERROR")
+                return False
             
-            # Set price based on order type
             price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
-            if price <= 0:
-                raise ValidationError(f"Invalid {'ask' if order_type == mt5.ORDER_TYPE_BUY else 'bid'} price: {price}")
             
+            # Simple order request
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": active_symbol,  # Use current active symbol
+                "symbol": active_symbol,
                 "volume": lot_size,
                 "type": order_type,
-                "price": price,  # Add current market price
+                "price": price,
                 "deviation": 20,
-                "magic": self.config["order_execution"]["magic_number"],
-                "comment": f"AI_Smart_{signal.strength:.1f}",
+                "magic": 234000,  # Simple magic number parameter
+                "comment": f"AI_Trade_{signal.direction}",
                 "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": self.filling_type,
+                "type_filling": mt5.ORDER_FILLING_IOC,
             }
             
-            # Pre-order validation
-            start_time = time.time()
-            is_valid, validation_msg = self._validate_order_prerequisites(request)
+            # Log order details
+            self.log(f"Sending order: {signal.direction} {lot_size} {active_symbol} @ {price}", "INFO")
             
-            if not is_valid:
-                self.log(f"❌ Order validation failed: {validation_msg}", "ERROR")
-                return False
-            
-            self.log(f"✅ Order validation passed", "DEBUG")
-            
-            # Use enhanced retry mechanism instead of manual loop
-            result = self._execute_order_with_retry(request)  # Use default config settings
+            # Direct order send - let MT5 handle validation
+            result = mt5.order_send(request)
             
             if result is None:
-                execution_time = (time.time() - start_time) * 1000
-                self.log(f"❌ Order execution failed after all attempts (took {execution_time:.1f}ms)", "ERROR")
+                self.log("Order send returned None", "ERROR")
                 return False
             
+            # Check result
             if result.retcode == mt5.TRADE_RETCODE_DONE:
-                execution_time = (time.time() - start_time) * 1000
+                self.total_signals += 1
                 self.last_signal_time = datetime.now()
                 self.hourly_signals.append(datetime.now())
-                self.total_signals += 1
                 
-                self.log(f"✅ Order executed: {signal.direction} {lot_size} lots at {price:.5f}")
-                self.log(f"   Ticket: {result.order}, Execution time: {execution_time:.1f}ms")
-                self.log(f"   Reason: {signal.reason}")
+                self.log(f"Order executed: {signal.direction} {lot_size} lots at {price}")
+                self.log(f"Ticket: {result.order}")
                 return True
             else:
-                error_description = self._get_trade_error_description(result.retcode)
-                execution_time = (time.time() - start_time) * 1000
-                self.log(f"❌ Order failed: {error_description} (code: {result.retcode}) - took {execution_time:.1f}ms", "ERROR")
+                error_desc = self._get_trade_error_description(result.retcode)
+                self.log(f"Order failed: {error_desc} (code: {result.retcode})", "ERROR")
                 return False
             
-        except ValidationError as e:
-            self.log(f"Validation error in execute_normal_order: {str(e)}", "ERROR")
-            return False
         except Exception as e:
-            self.log(f"Error executing normal order: {str(e)}", "ERROR")
+            self.log(f"Error executing order: {str(e)}", "ERROR")
             return False
+    
     
     def _get_trade_error_description(self, retcode: int) -> str:
         """Get human-readable description of trade error code"""
@@ -4950,7 +4861,7 @@ class TradingSystem:
                 "type": close_type,
                 "position": position.ticket,
                 "deviation": 20,
-                "magic": self.config["order_execution"]["magic_number"],
+                "magic": 234000,  # Simple magic number parameter
                 "comment": f"Smart_Redirect_{original_signal.direction[:1]}",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": self.filling_type,
@@ -5228,7 +5139,7 @@ class TradingSystem:
                 "type": close_type,
                 "position": position.ticket,
                 "deviation": 20,
-                "magic": self.config["order_execution"]["magic_number"],
+                "magic": 234000,  # Simple magic number parameter
                 "comment": f"Smart_{reason[:12]}",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": self.filling_type,
@@ -6342,7 +6253,7 @@ class TradingSystem:
                 "volume": hedge_volume,
                 "type": hedge_type,
                 "deviation": 20,
-                "magic": self.config["order_execution"]["magic_number"],  # Use single magic number for all orders
+                "magic": 234000,  # Simple magic number parameter
                 "comment": f"HG_{position.ticket}_{strategy[:4]}",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": self.filling_type,
@@ -8585,170 +8496,17 @@ class TradingSystem:
             self.log(f"Error getting smart HG analytics: {str(e)}", "ERROR")
             return {}
 
-    def _validate_order_prerequisites(self, request: dict) -> Tuple[bool, str]:
-        """Simplified and less strict pre-order validation to allow legitimate orders"""
-        try:
-            # Check if validation is enabled
-            if not self.config["order_execution"]["validation_enabled"]:
-                return True, "Validation disabled"
-            
-            # 1. Basic request validation - only check absolutely required fields
-            required_fields = ["action", "symbol", "volume", "type"]
-            for field in required_fields:
-                if field not in request:
-                    return False, f"Missing required field: {field}"
-            
-            # 2. Very basic volume validation - just check it's positive
-            volume = request["volume"]
-            if volume <= 0:
-                return False, f"Invalid volume: {volume}"
-            
-            # 3. Skip MT5 connection check - let the order execution handle this
-            # This prevents blocking orders when connection is temporarily unstable
-            
-            # 4. Skip account validation - let MT5 broker handle this
-            # This prevents blocking orders due to temporary account info retrieval issues
-            
-            # All basic validations passed - allow order to proceed
-            return True, "Basic validation passed - order allowed to proceed"
-            
-        except Exception as e:
-            # Don't block orders due to validation exceptions
-            self.log(f"⚠️ Validation exception (allowing order to proceed): {str(e)}", "WARNING")
-            return True, "Validation exception - allowing order to proceed"
-
     def _get_tick_data_with_retry(self, symbol: str, max_attempts: int = 3) -> Optional[Any]:
-        """Get tick data with retry mechanism"""
+        """Simple tick data retrieval with minimal retry"""
         for attempt in range(max_attempts):
             try:
                 tick = mt5.symbol_info_tick(symbol)
                 if tick is not None:
                     return tick
-                
-                self.log(f"Tick data request failed for {symbol} (attempt {attempt + 1})", "WARNING")
-                if attempt < max_attempts - 1:
-                    time.sleep(0.1)  # Short delay between attempts
-                    
+                time.sleep(0.1) if attempt < max_attempts - 1 else None
             except Exception as e:
-                self.log(f"Exception getting tick data for {symbol} (attempt {attempt + 1}): {str(e)}", "ERROR")
-                if attempt < max_attempts - 1:
-                    time.sleep(0.1)
-        
-        return None
-
-    def _execute_order_with_retry(self, request: dict, max_attempts: int = None) -> Optional[Any]:
-        """Simplified order execution with focus on actually sending orders to broker"""
-        start_time = time.time()
-        
-        # Use configuration settings
-        if max_attempts is None:
-            max_attempts = self.config["order_execution"]["max_retry_attempts"]
-        
-        base_delay = self.config["order_execution"]["base_retry_delay"]
-        max_delay = self.config["order_execution"]["max_retry_delay"]
-        use_exponential_backoff = self.config["order_execution"]["exponential_backoff"]
-        
-        # Log order attempt clearly
-        symbol = request.get('symbol', 'Unknown')
-        volume = request.get('volume', 'Unknown')
-        order_type = request.get('type', 'Unknown')
-        price = request.get('price', 'Unknown')
-        
-        type_name = "BUY" if order_type == getattr(mt5, 'ORDER_TYPE_BUY', 0) else "SELL"
-        self.log(f"📤 Sending order to broker: {type_name} {volume} {symbol} @ {price}", "INFO")
-        
-        for attempt in range(max_attempts):
-            attempt_start = time.time()
-            
-            try:
-                # Log actual order send attempt
-                self.log(f"🔄 Attempt {attempt + 1}/{max_attempts}: Calling mt5.order_send()", "INFO")
-                
-                # Send the order to broker
-                result = mt5.order_send(request)
-                execution_time = (time.time() - attempt_start) * 1000  # Convert to ms
-                
-                # Log the result of order_send call
-                if result is None:
-                    self.log(f"❌ mt5.order_send() returned None (attempt {attempt + 1}) - took {execution_time:.1f}ms", "ERROR")
-                    self.log("   This means the order was not sent to the broker at all", "ERROR")
-                else:
-                    self.log(f"✅ mt5.order_send() returned result object - took {execution_time:.1f}ms", "INFO")
-                
-                if result is None:
-                    if attempt < max_attempts - 1:
-                        # Simple backoff for None returns
-                        delay = base_delay * (1.5 ** attempt) if use_exponential_backoff else base_delay
-                        delay = min(delay, max_delay)
-                        self.log(f"   Retrying in {delay:.1f}s...", "INFO")
-                        time.sleep(delay)
-                        continue
-                    else:
-                        self.log(f"❌ All {max_attempts} attempts failed - order was never sent to broker", "ERROR")
-                        return None
-                
-                # Check for successful order execution
-                if result.retcode == mt5.TRADE_RETCODE_DONE:
-                    total_time = (time.time() - start_time) * 1000
-                    self.log(f"✅ Order successfully sent to broker and executed!", "INFO")
-                    self.log(f"   Order Ticket: {result.order}, Execution time: {execution_time:.1f}ms, Total time: {total_time:.1f}ms", "INFO")
-                    return result
-                
-                # Check for transient errors that can be retried
-                retriable_errors = [
-                    mt5.TRADE_RETCODE_REQUOTE,        # Requote
-                    mt5.TRADE_RETCODE_TIMEOUT,        # Timeout  
-                    mt5.TRADE_RETCODE_PRICE_CHANGED,  # Price changed
-                    mt5.TRADE_RETCODE_CONNECTION,     # Connection issues
-                    mt5.TRADE_RETCODE_TOO_MANY_REQUESTS, # Too many requests
-                    mt5.TRADE_RETCODE_TRADE_TIMEOUT,  # Trade timeout
-                    mt5.TRADE_RETCODE_ERROR,          # General error (sometimes temporary)
-                    mt5.TRADE_RETCODE_PRICE_OFF,      # Off quotes (often temporary)
-                    mt5.TRADE_RETCODE_INVALID_PRICE,  # Invalid price (can be fixed with update)
-                ]
-                
-                if result.retcode in retriable_errors:
-                    error_desc = self._get_trade_error_description(result.retcode)
-                    self.log(f"🔄 Transient error from broker: {error_desc} (code: {result.retcode}) - attempt {attempt + 1}", "WARNING")
-                    
-                    if attempt < max_attempts - 1:
-                        # Update price for retry if price-related error
-                        if result.retcode in [mt5.TRADE_RETCODE_REQUOTE, mt5.TRADE_RETCODE_PRICE_CHANGED, mt5.TRADE_RETCODE_PRICE_OFF, mt5.TRADE_RETCODE_INVALID_PRICE]:
-                            tick = self._get_tick_data_with_retry(request["symbol"])
-                            if tick is not None:
-                                old_price = request.get("price", 0)
-                                if request["type"] == mt5.ORDER_TYPE_BUY:
-                                    request["price"] = tick.ask
-                                else:
-                                    request["price"] = tick.bid
-                                self.log(f"   Updated price: {old_price:.5f} → {request['price']:.5f}", "INFO")
-                        
-                        # Calculate retry delay
-                        delay = base_delay * (1.5 ** attempt) if use_exponential_backoff else base_delay
-                        delay = min(delay, max_delay)
-                        self.log(f"   Retrying in {delay:.1f}s...", "INFO")
-                        time.sleep(delay)
-                        continue
-                
-                # Non-retriable error - log and return
-                error_desc = self._get_trade_error_description(result.retcode)
-                self.log(f"❌ Order rejected by broker: {error_desc} (code: {result.retcode})", "ERROR")
-                return result
-                
-            except Exception as e:
-                execution_time = (time.time() - attempt_start) * 1000
-                self.log(f"❌ Exception during mt5.order_send() call (attempt {attempt + 1}): {str(e)} - took {execution_time:.1f}ms", "ERROR")
-                
-                if attempt < max_attempts - 1:
-                    # Simple backoff for exceptions
-                    delay = base_delay * (1.5 ** attempt) if use_exponential_backoff else base_delay
-                    delay = min(delay, max_delay)
-                    self.log(f"   Retrying in {delay:.1f}s due to exception...", "INFO")
-                    time.sleep(delay)
-        
-        total_time = (time.time() - start_time) * 1000
-        self.log(f"❌ Order execution failed after {max_attempts} attempts - total time: {total_time:.1f}ms", "ERROR")
-        self.log("❌ No orders were successfully sent to the broker", "ERROR")
+                self.log(f"Error getting tick data for {symbol}: {str(e)}", "ERROR")
+                time.sleep(0.1) if attempt < max_attempts - 1 else None
         return None
 
     def test_order_execution(self) -> bool:
@@ -8904,7 +8662,7 @@ class TradingSystem:
                 "type": order_type,
                 "price": price,
                 "deviation": 30,  # Larger deviation for emergency orders
-                "magic": self.config["order_execution"]["magic_number"],
+                "magic": 234000,  # Simple magic number parameter
                 "comment": f"EMERGENCY_{signal.direction}",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": hardcoded_filling,
