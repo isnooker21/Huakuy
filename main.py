@@ -224,7 +224,17 @@ class TradingSystem:
                 "symbol_cache_ttl": 300,  # 5 minutes
                 "connection_timeout": 10,
                 "symbol_verification_enabled": True,
-                "fallback_enabled": True
+                "fallback_enabled": True,
+                "auto_detection_enabled": True,  # Enable XAUUSD auto-detection
+                "auto_detection_scan_interval": 3600,  # Rescan symbols every hour
+                "auto_detection_patterns": [
+                    r'^XAUUSD$',           # Exact match
+                    r'^XAUUSD\.[a-zA-Z]+$', # With extensions like .v, .c, .raw
+                    r'^XAUUSD[a-zA-Z]*$',   # With suffixes like XAUUSDm
+                    r'^XAU/USD$',          # Slash notation
+                    r'^GOLD$',             # Alternative gold symbol
+                    r'^GOLD\.[a-zA-Z]+$'   # Gold with extensions
+                ]
             },
             "performance": {
                 "cache_enabled": True,
@@ -482,6 +492,13 @@ class TradingSystem:
         self.last_symbol_verification = None
         self.symbol_status = {}  # Track symbol availability status
         
+        # 🔍 Auto-Detection System for XAUUSD Symbols
+        self.auto_detection_enabled = self.config["symbol_management"]["auto_detection_enabled"]
+        self.detected_xauusd_symbols = []  # Auto-detected XAUUSD symbols
+        self.last_symbol_scan = None  # Timestamp of last broker symbol scan
+        self.symbol_scan_interval = self.config["symbol_management"]["auto_detection_scan_interval"]
+        self.xauusd_pattern_variations = self.config["symbol_management"]["auto_detection_patterns"]
+        
         # Enhanced retry configuration
         self.symbol_retry_attempts = self.config["symbol_management"]["retry_attempts"]
         self.symbol_retry_delay_base = self.config["symbol_management"]["retry_delay_base"] 
@@ -504,11 +521,22 @@ class TradingSystem:
             
             self.log("📊 Symbol Operation Status Report:", "INFO")
             self.log(f"  Current Symbol: {stats['current_symbol']}", "INFO")
+            self.log(f"  Auto-Detection: {'Enabled' if self.auto_detection_enabled else 'Disabled'}", "INFO")
             self.log(f"  Success Rate: {stats['success_rate']:.1f}% ({stats['successful_requests']}/{stats['total_requests']})", "INFO")
             self.log(f"  Cache Hit Rate: {stats['cache_hit_rate']:.1f}% ({stats['cache_hits']} hits)", "INFO")
             self.log(f"  Fallback Usage: {stats['fallback_usage_rate']:.1f}% ({stats['fallback_used']} times)", "INFO")
             self.log(f"  Average Response Time: {stats['average_response_time']:.3f}s", "INFO")
             self.log(f"  Cache Size: {stats['symbol_cache_size']} entries", "INFO")
+            
+            # Log auto-detection status
+            if self.auto_detection_enabled:
+                detected_count = len(self.detected_xauusd_symbols)
+                self.log(f"  Detected XAUUSD Symbols: {detected_count}", "INFO")
+                if self.last_symbol_scan:
+                    last_scan_time = datetime.fromtimestamp(self.last_symbol_scan)
+                    self.log(f"  Last Symbol Scan: {last_scan_time.strftime('%Y-%m-%d %H:%M:%S')}", "INFO")
+                else:
+                    self.log(f"  Last Symbol Scan: Never", "INFO")
             
             # Log symbol availability status
             if stats['symbols_status']:
@@ -782,6 +810,263 @@ class TradingSystem:
         
         return results
 
+    def scan_broker_symbols(self) -> List[str]:
+        """Scan all available symbols from the broker"""
+        try:
+            if not MT5_AVAILABLE or not self.mt5_connected:
+                self.log("Cannot scan broker symbols - MT5 not connected", "WARNING")
+                return []
+            
+            self.log("🔍 Scanning all available symbols from broker...", "INFO")
+            
+            # Get all symbols from broker
+            all_symbols = mt5.symbols_get()
+            if all_symbols is None:
+                self.log("Failed to retrieve symbols from broker", "ERROR")
+                return []
+            
+            # Extract symbol names
+            symbol_names = [symbol.name for symbol in all_symbols]
+            self.log(f"📊 Found {len(symbol_names)} total symbols on broker", "INFO")
+            
+            return symbol_names
+            
+        except Exception as e:
+            self.log(f"Error scanning broker symbols: {str(e)}", "ERROR")
+            return []
+
+    def auto_detect_xauusd_symbols(self) -> List[str]:
+        """Auto-detect XAUUSD symbol variants from broker's symbol list"""
+        try:
+            if not self.auto_detection_enabled:
+                self.log("Auto-detection disabled, using configured fallback symbols", "INFO")
+                return self.fallback_symbols
+            
+            # Check if we need to rescan (cache for 1 hour)
+            current_time = time.time()
+            if (self.last_symbol_scan is not None and 
+                (current_time - self.last_symbol_scan) < self.symbol_scan_interval and
+                self.detected_xauusd_symbols):
+                self.log(f"📋 Using cached XAUUSD symbols ({len(self.detected_xauusd_symbols)} found)", "INFO")
+                return self.detected_xauusd_symbols
+            
+            # Scan broker symbols
+            all_symbols = self.scan_broker_symbols()
+            if not all_symbols:
+                self.log("No symbols available, falling back to configured symbols", "WARNING")
+                return self.fallback_symbols
+            
+            # Import regex for pattern matching
+            import re
+            
+            detected_symbols = []
+            
+            # Search for XAUUSD variations using patterns
+            for symbol in all_symbols:
+                symbol_upper = symbol.upper()
+                
+                # Check each pattern
+                for pattern in self.xauusd_pattern_variations:
+                    if re.match(pattern, symbol_upper):
+                        detected_symbols.append(symbol)
+                        break
+            
+            # Remove duplicates and sort by preference
+            detected_symbols = list(set(detected_symbols))
+            
+            # Sort symbols by preference (exact XAUUSD first, then by length)
+            def symbol_priority(symbol):
+                s = symbol.upper()
+                if s == 'XAUUSD':
+                    return 0  # Highest priority
+                elif s.startswith('XAUUSD.'):
+                    return 1  # Extensions have second priority
+                elif s.startswith('XAUUSD'):
+                    return 2  # Other XAUUSD variants
+                elif s == 'GOLD':
+                    return 3  # GOLD symbol
+                else:
+                    return 4  # Lowest priority
+            
+            detected_symbols.sort(key=symbol_priority)
+            
+            if detected_symbols:
+                self.log(f"✅ Auto-detected {len(detected_symbols)} XAUUSD symbols:", "INFO")
+                for i, symbol in enumerate(detected_symbols):
+                    # Verify symbol is actually available and tradeable
+                    if self._verify_symbol_availability(symbol):
+                        self.log(f"  {i+1}. {symbol} ✅", "INFO")
+                    else:
+                        self.log(f"  {i+1}. {symbol} ❌ (not available)", "WARNING")
+                        detected_symbols.remove(symbol)
+                
+                # Cache the results
+                self.detected_xauusd_symbols = detected_symbols
+                self.last_symbol_scan = current_time
+                
+                return detected_symbols
+            else:
+                self.log("⚠️ No XAUUSD symbols auto-detected, using fallback configuration", "WARNING")
+                return self.fallback_symbols
+                
+        except Exception as e:
+            self.log(f"Error in auto-detection: {str(e)}", "ERROR")
+            self.log("Falling back to configured symbols", "WARNING")
+            return self.fallback_symbols
+
+    def update_symbol_configuration(self):
+        """Update symbol configuration with auto-detected symbols"""
+        try:
+            if not self.auto_detection_enabled:
+                self.log("Auto-detection disabled, keeping current configuration", "DEBUG")
+                return
+            
+            # Safety check: ensure MT5 is connected
+            if not self.mt5_connected:
+                self.log("MT5 not connected, skipping symbol configuration update", "WARNING")
+                return
+            
+            # Get auto-detected symbols
+            detected_symbols = self.auto_detect_xauusd_symbols()
+            
+            if detected_symbols and len(detected_symbols) > 0:
+                # Verify that detected symbols are actually different from current config
+                current_config_symbols = [self.current_symbol] + self.fallback_symbols
+                if set(detected_symbols) == set(current_config_symbols):
+                    self.log("Detected symbols match current configuration, no update needed", "DEBUG")
+                    return
+                
+                # Update primary symbol to the first (highest priority) detected symbol
+                old_symbol = self.current_symbol
+                new_primary_symbol = detected_symbols[0]
+                
+                # Safety check: ensure the new symbol is actually available
+                if not self._verify_symbol_availability(new_primary_symbol):
+                    self.log(f"⚠️ Primary detected symbol {new_primary_symbol} not available, keeping current", "WARNING")
+                    return
+                
+                if old_symbol != new_primary_symbol:
+                    self.log(f"🔄 Updating primary symbol: {old_symbol} → {new_primary_symbol}", "INFO")
+                    self.current_symbol = new_primary_symbol
+                    self.symbol = new_primary_symbol
+                else:
+                    self.log(f"Primary symbol unchanged: {new_primary_symbol}", "DEBUG")
+                
+                # Update fallback symbols with the rest of detected symbols
+                if len(detected_symbols) > 1:
+                    new_fallbacks = detected_symbols[1:]  # Exclude the primary symbol
+                    
+                    # Also include original configured fallbacks as additional options
+                    original_fallbacks = self.config["trading_parameters"]["fallback_symbols"]
+                    for fallback in original_fallbacks:
+                        if fallback not in detected_symbols:
+                            new_fallbacks.append(fallback)
+                    
+                    # Limit total fallback symbols to avoid excessive list
+                    max_fallbacks = 10
+                    if len(new_fallbacks) > max_fallbacks:
+                        self.log(f"Limiting fallback symbols to {max_fallbacks} (was {len(new_fallbacks)})", "INFO")
+                        new_fallbacks = new_fallbacks[:max_fallbacks]
+                    
+                    self.fallback_symbols = new_fallbacks
+                    self.log(f"📋 Updated fallback symbols: {new_fallbacks}", "DEBUG")
+                
+                # Update the configuration dictionary for consistency
+                self.config["trading_parameters"]["symbol"] = self.current_symbol
+                if "auto_detected_symbols" not in self.config["trading_parameters"]:
+                    self.config["trading_parameters"]["auto_detected_symbols"] = detected_symbols
+                else:
+                    self.config["trading_parameters"]["auto_detected_symbols"] = detected_symbols
+                
+                self.log(f"✅ Symbol configuration updated with {len(detected_symbols)} auto-detected symbols", "INFO")
+            else:
+                self.log("⚠️ No symbols auto-detected, keeping current configuration", "WARNING")
+                
+        except Exception as e:
+            self.log(f"Error updating symbol configuration: {str(e)}", "ERROR")
+
+    def manual_symbol_detection(self) -> Dict[str, Any]:
+        """Manually trigger symbol detection and return results for inspection"""
+        try:
+            self.log("🔍 Manual XAUUSD symbol detection initiated", "INFO")
+            
+            # Force a fresh scan by clearing cache
+            self.last_symbol_scan = None
+            self.detected_xauusd_symbols = []
+            
+            # Get detected symbols
+            detected_symbols = self.auto_detect_xauusd_symbols()
+            
+            # Get all broker symbols for comparison
+            all_symbols = self.scan_broker_symbols()
+            
+            # Prepare results
+            results = {
+                "detection_enabled": self.auto_detection_enabled,
+                "current_symbol": self.current_symbol,
+                "fallback_symbols": self.fallback_symbols,
+                "detected_xauusd_symbols": detected_symbols,
+                "total_broker_symbols": len(all_symbols),
+                "detection_patterns": self.xauusd_pattern_variations,
+                "detection_timestamp": datetime.now().isoformat()
+            }
+            
+            self.log(f"📊 Manual detection results:", "INFO")
+            self.log(f"  Current symbol: {results['current_symbol']}", "INFO")
+            self.log(f"  Detected XAUUSD symbols: {len(detected_symbols)}", "INFO")
+            self.log(f"  Total broker symbols: {results['total_broker_symbols']}", "INFO")
+            
+            return results
+            
+        except Exception as e:
+            self.log(f"Error in manual symbol detection: {str(e)}", "ERROR")
+            return {
+                "error": str(e),
+                "detection_enabled": self.auto_detection_enabled,
+                "detection_timestamp": datetime.now().isoformat()
+            }
+
+    def get_symbol_detection_status(self) -> Dict[str, Any]:
+        """Get current status of symbol detection system"""
+        try:
+            return {
+                "auto_detection_enabled": self.auto_detection_enabled,
+                "current_symbol": self.current_symbol,
+                "fallback_symbols": self.fallback_symbols,
+                "detected_symbols": self.detected_xauusd_symbols,
+                "last_scan_time": self.last_symbol_scan,
+                "scan_interval_seconds": self.symbol_scan_interval,
+                "detection_patterns": self.xauusd_pattern_variations,
+                "symbol_status": self.symbol_status,
+                "symbol_cache_size": len(self.symbol_cache),
+                "mt5_connected": self.mt5_connected
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    def set_auto_detection_enabled(self, enabled: bool) -> bool:
+        """Enable or disable auto-detection at runtime"""
+        try:
+            old_state = self.auto_detection_enabled
+            self.auto_detection_enabled = enabled
+            self.config["symbol_management"]["auto_detection_enabled"] = enabled
+            
+            self.log(f"🔧 Auto-detection {'enabled' if enabled else 'disabled'} (was {'enabled' if old_state else 'disabled'})", "INFO")
+            
+            # If enabling and connected to MT5, trigger detection
+            if enabled and not old_state and self.mt5_connected:
+                self.log("🔍 Triggering symbol detection due to enable", "INFO")
+                try:
+                    self.update_symbol_configuration()
+                except Exception as e:
+                    self.log(f"Warning: Auto-detection trigger failed: {e}", "WARNING")
+            
+            return True
+            
+        except Exception as e:
+            self.log(f"Error setting auto-detection state: {str(e)}", "ERROR")
+            return False
+
     def detect_broker_filling_type(self) -> int:
         """Auto-detect broker's supported filling type with enhanced symbol validation"""
         if not MT5_AVAILABLE:
@@ -887,9 +1172,23 @@ class TradingSystem:
                     self.log(f"Warning: Could not detect filling type: {e}", "WARNING")
                     self.filling_type = mt5.ORDER_FILLING_IOC  # Safe default
                 
+                # Auto-detect XAUUSD symbols after successful connection
+                try:
+                    if self.auto_detection_enabled:
+                        self.log("🔍 Starting XAUUSD symbol auto-detection...", "INFO")
+                        self.update_symbol_configuration()
+                    else:
+                        self.log("Auto-detection disabled, using configured symbols", "INFO")
+                except Exception as e:
+                    self.log(f"Warning: XAUUSD auto-detection failed: {e}", "WARNING")
+                    self.log("Continuing with configured symbols", "INFO")
+                
                 self.log(f"✅ Connected to MT5 - Account: {account_info.login}")
                 self.log(f"Balance: ${account_info.balance:.2f}, Equity: ${account_info.equity:.2f}")
                 self.log(f"Trade allowed: {account_info.trade_allowed}")
+                self.log(f"Active symbol: {self.current_symbol}")
+                if len(self.fallback_symbols) > 0:
+                    self.log(f"Fallback symbols: {', '.join(self.fallback_symbols[:3])}{'...' if len(self.fallback_symbols) > 3 else ''}")
                 
                 # Initialize connection health tracking
                 self.last_mt5_ping = datetime.now()
@@ -1195,12 +1494,26 @@ class TradingSystem:
                     self.log(f"Warning: Could not detect filling type: {e}", "WARNING")
                     self.filling_type = mt5.ORDER_FILLING_IOC  # Safe default
                 
+                # Auto-detect XAUUSD symbols after successful connection
+                try:
+                    if self.auto_detection_enabled:
+                        self.log("🔍 Starting XAUUSD symbol auto-detection...", "INFO")
+                        self.update_symbol_configuration()
+                    else:
+                        self.log("Auto-detection disabled, using configured symbols", "INFO")
+                except Exception as e:
+                    self.log(f"Warning: XAUUSD auto-detection failed: {e}", "WARNING")
+                    self.log("Continuing with configured symbols", "INFO")
+                
                 # Get terminal info for logging
                 terminal_info = mt5.terminal_info()
                 self.log(f"✅ Connected to MT5 Terminal - {terminal_info.name if terminal_info else 'Unknown'}")
                 self.log(f"Account: {account_info.login}@{account_info.server}")
                 self.log(f"Balance: ${account_info.balance:.2f}, Equity: ${account_info.equity:.2f}")
                 self.log(f"Trade allowed: {account_info.trade_allowed}")
+                self.log(f"Active symbol: {self.current_symbol}")
+                if len(self.fallback_symbols) > 0:
+                    self.log(f"Fallback symbols: {', '.join(self.fallback_symbols[:3])}{'...' if len(self.fallback_symbols) > 3 else ''}")
                 
                 # Initialize connection health tracking
                 self.last_mt5_ping = datetime.now()
