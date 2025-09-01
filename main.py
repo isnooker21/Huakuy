@@ -26,6 +26,7 @@ import threading
 import time
 import json
 import logging
+import random
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Any, TYPE_CHECKING
 from enum import Enum
@@ -8785,7 +8786,8 @@ class TradingSystem:
                             delay = min(base_delay + (attempt * 0.5), max_delay)
                         
                         # Add small jitter to prevent thundering herd
-                        jitter = 0.1 + (attempt * 0.05)
+                        base_jitter = 0.1 + (attempt * 0.05)
+                        jitter = base_jitter * (0.5 + random.random() * 0.5)  # ±50% variation
                         delay = min(delay + jitter, max_delay)
                         
                         if detailed_logging:
@@ -8813,6 +8815,11 @@ class TradingSystem:
                         delay = min(base_delay * (2 ** attempt), max_delay)
                     else:
                         delay = min(base_delay + (attempt * 0.5), max_delay)
+                    
+                    # Add small jitter for exception handling consistency
+                    base_jitter = 0.05 + (attempt * 0.025)  # Smaller jitter for exception case
+                    jitter = base_jitter * (0.5 + random.random() * 0.5)
+                    delay = min(delay + jitter, max_delay)
                     
                     if detailed_logging:
                         self.log(f"   Retrying in {delay:.1f}s due to exception...", "INFO")
