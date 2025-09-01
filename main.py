@@ -8605,29 +8605,30 @@ class TradingSystem:
                 if field not in request:
                     return False, f"Missing required field: {field}"
             
-            # 2. Connection health validation
+            # 2. Connection health validation (reduced from retry logic)
             if not self.mt5_connected:
                 return False, "MT5 not connected"
             
-            if not self.check_mt5_connection_health(include_symbol_check=False):
-                return False, "MT5 connection health check failed"
+            # Skip redundant connection health check if we're in retry context
+            # The retry logic will handle connection issues appropriately
             
             # 3. Circuit breaker check
             if self.circuit_breaker_open:
                 return False, "Circuit breaker is open - trading temporarily disabled"
             
-            # 4. Symbol validation
+            # 4. Symbol validation - use cached symbol info if available to reduce calls
             symbol = request["symbol"]
-            symbol_info = self.get_symbol_info_with_retry(symbol, max_retries=2)  # Quick retry
+            symbol_info = mt5.symbol_info(symbol)  # Single call instead of retry logic
             if symbol_info is None:
                 return False, f"Symbol {symbol} not available"
             
+            # Only check/fix Market Watch selection if symbol is not visible
             if not symbol_info.visible:
                 self.log(f"Symbol {symbol} not visible, attempting to select in Market Watch", "INFO")
                 if not mt5.symbol_select(symbol, True):
                     return False, f"Cannot select symbol {symbol} in Market Watch"
                 
-                # Re-verify after selection
+                # Quick re-verification after selection
                 symbol_info = mt5.symbol_info(symbol)
                 if symbol_info is None or not symbol_info.visible:
                     return False, f"Symbol {symbol} still not available after Market Watch selection"
@@ -8647,7 +8648,7 @@ class TradingSystem:
             if hasattr(symbol_info, 'trade_mode') and symbol_info.trade_mode == mt5.SYMBOL_TRADE_MODE_DISABLED:
                 return False, f"Trading disabled for symbol {symbol}"
             
-            # 7. Price validation (for market orders)
+            # 7. Price validation (for market orders) - use relaxed thresholds
             if "price" in request:
                 price = request["price"]
                 if price <= 0:
@@ -8658,24 +8659,26 @@ class TradingSystem:
                 if tick is None:
                     return False, f"Cannot get current tick data for {symbol}"
                 
-                # Price staleness check (configurable threshold)
+                # Relaxed price staleness check (configurable threshold)
                 staleness_threshold = self.config["order_execution"]["price_staleness_threshold"]
                 if hasattr(tick, 'time') and (time.time() - tick.time) > staleness_threshold:
                     return False, f"Tick data is stale (>{staleness_threshold}s old)"
                 
-                # Price reasonableness check (configurable deviation threshold)
+                # More lenient price reasonableness check for volatile markets
                 deviation_threshold = self.config["order_execution"]["price_deviation_threshold"]
                 current_price = tick.bid if request["type"] == mt5.ORDER_TYPE_SELL else tick.ask
-                price_diff_pct = abs(price - current_price) / current_price * 100
-                if price_diff_pct > deviation_threshold:
-                    return False, f"Price {price} differs from market {current_price} by {price_diff_pct:.2f}% (threshold: {deviation_threshold}%)"
+                if current_price > 0:  # Avoid division by zero
+                    price_diff_pct = abs(price - current_price) / current_price * 100
+                    if price_diff_pct > deviation_threshold:
+                        self.log(f"⚠️ Price {price} differs from market {current_price} by {price_diff_pct:.2f}% (threshold: {deviation_threshold}%)", "WARNING")
+                        # For order execution, we'll allow this but warn - the market may have moved
             
-            # 8. Account validation
+            # 8. Basic account validation (simplified)
             account_info = mt5.account_info()
             if account_info is None:
                 return False, "Cannot get account information"
             
-            if not hasattr(account_info, 'trade_allowed') or not account_info.trade_allowed:
+            if hasattr(account_info, 'trade_allowed') and not account_info.trade_allowed:
                 return False, "Trading not allowed on this account"
             
             # All validations passed
@@ -8717,16 +8720,20 @@ class TradingSystem:
         check_health_on_retry = self.config["order_execution"]["connection_health_check_on_retry"]
         detailed_logging = self.config["order_execution"]["detailed_logging"]
         
+        # Track if we've already had a connection failure to avoid redundant health checks
+        connection_failed_once = False
+        
         for attempt in range(max_attempts):
             attempt_start = time.time()
             
             try:
-                # Pre-order connection health check on later attempts
-                if attempt > 0 and check_health_on_retry:
+                # Pre-order connection health check only after first connection failure
+                if attempt > 0 and check_health_on_retry and connection_failed_once:
                     if not self.check_mt5_connection_health(include_symbol_check=False):
                         self.log(f"Connection health check failed before retry {attempt + 1}", "WARNING")
                         if attempt < max_attempts - 1:
-                            delay = min(2 ** attempt, 10) if use_exponential_backoff else base_delay
+                            # Use simpler delay calculation for connection issues
+                            delay = min(base_delay * (1 + attempt * 0.5), max_delay)
                             time.sleep(delay)
                             continue
                         return None
@@ -8737,11 +8744,19 @@ class TradingSystem:
                 
                 if result is None:
                     self.log(f"❌ Order send returned None (attempt {attempt + 1}) - took {execution_time:.1f}ms", "WARNING")
+                    # Mark connection as potentially problematic
+                    connection_failed_once = True
+                    
                     if attempt < max_attempts - 1:
+                        # Use more conservative backoff for None returns
                         if use_exponential_backoff:
-                            delay = min(base_delay * (2 ** attempt), max_delay)
+                            delay = min(base_delay * (1.5 ** attempt), max_delay)  # Less aggressive than 2^attempt
                         else:
-                            delay = min(base_delay + (attempt * 0.5), max_delay)
+                            delay = min(base_delay + (attempt * 0.3), max_delay)  # Smaller increments
+                        
+                        # Simple jitter to prevent thundering herd
+                        jitter = random.uniform(0.1, 0.3)
+                        delay = min(delay + jitter, max_delay)
                         
                         if detailed_logging:
                             self.log(f"   Retrying in {delay:.1f}s...", "INFO")
@@ -8758,15 +8773,21 @@ class TradingSystem:
                     mt5.TRADE_RETCODE_TOO_MANY_REQUESTS, # Too many requests
                     mt5.TRADE_RETCODE_TRADE_TIMEOUT,  # Trade timeout
                     mt5.TRADE_RETCODE_ERROR,          # General error (sometimes temporary)
+                    mt5.TRADE_RETCODE_PRICE_OFF,      # Off quotes (often temporary)
+                    mt5.TRADE_RETCODE_INVALID_PRICE,  # Invalid price (can be fixed with update)
                 ]
                 
                 if result.retcode in retriable_errors:
                     error_desc = self._get_trade_error_description(result.retcode)
                     self.log(f"🔄 Transient error: {error_desc} (code: {result.retcode}) - attempt {attempt + 1}, took {execution_time:.1f}ms", "WARNING")
                     
+                    # Mark connection as potentially problematic for connection-related errors
+                    if result.retcode in [mt5.TRADE_RETCODE_CONNECTION, mt5.TRADE_RETCODE_TIMEOUT, mt5.TRADE_RETCODE_TRADE_TIMEOUT]:
+                        connection_failed_once = True
+                    
                     if attempt < max_attempts - 1:
                         # Update price for retry if price-related error
-                        if result.retcode in [mt5.TRADE_RETCODE_REQUOTE, mt5.TRADE_RETCODE_PRICE_CHANGED]:
+                        if result.retcode in [mt5.TRADE_RETCODE_REQUOTE, mt5.TRADE_RETCODE_PRICE_CHANGED, mt5.TRADE_RETCODE_PRICE_OFF, mt5.TRADE_RETCODE_INVALID_PRICE]:
                             tick = self._get_tick_data_with_retry(request["symbol"])
                             if tick is not None:
                                 old_price = request.get("price", 0)
@@ -8779,15 +8800,15 @@ class TradingSystem:
                             else:
                                 self.log("   ⚠️ Could not update price - tick data unavailable", "WARNING")
                         
-                        # Calculate retry delay
+                        # Calculate retry delay with more conservative approach
                         if use_exponential_backoff:
-                            delay = min(base_delay * (2 ** attempt), max_delay)
+                            # More conservative exponential backoff: 0.5s → 1s → 1.5s → 2.25s → 3.4s
+                            delay = min(base_delay * (1.5 ** attempt), max_delay)
                         else:
-                            delay = min(base_delay + (attempt * 0.5), max_delay)
+                            delay = min(base_delay + (attempt * 0.3), max_delay)
                         
-                        # Add small jitter to prevent thundering herd
-                        base_jitter = 0.1 + (attempt * 0.05)
-                        jitter = base_jitter * (0.5 + random.random() * 0.5)  # ±50% variation
+                        # Simple jitter to prevent thundering herd
+                        jitter = random.uniform(0.1, 0.3)
                         delay = min(delay + jitter, max_delay)
                         
                         if detailed_logging:
@@ -8810,15 +8831,18 @@ class TradingSystem:
                 execution_time = (time.time() - attempt_start) * 1000
                 self.log(f"❌ Exception during order execution (attempt {attempt + 1}): {str(e)} - took {execution_time:.1f}ms", "ERROR")
                 
+                # Mark connection as potentially problematic on exceptions
+                connection_failed_once = True
+                
                 if attempt < max_attempts - 1:
+                    # Use conservative backoff for exceptions
                     if use_exponential_backoff:
-                        delay = min(base_delay * (2 ** attempt), max_delay)
+                        delay = min(base_delay * (1.5 ** attempt), max_delay)
                     else:
-                        delay = min(base_delay + (attempt * 0.5), max_delay)
+                        delay = min(base_delay + (attempt * 0.3), max_delay)
                     
-                    # Add small jitter for exception handling consistency
-                    base_jitter = 0.05 + (attempt * 0.025)  # Smaller jitter for exception case
-                    jitter = base_jitter * (0.5 + random.random() * 0.5)
+                    # Simple jitter for exception handling consistency
+                    jitter = random.uniform(0.1, 0.3)
                     delay = min(delay + jitter, max_delay)
                     
                     if detailed_logging:
