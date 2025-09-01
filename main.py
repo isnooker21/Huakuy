@@ -1141,25 +1141,10 @@ class TradingSystem:
             self.log(f"Error setting auto-detection state: {str(e)}", "ERROR")
             return False
 
-    def detect_broker_filling_type(self) -> int:
-        """Hard-coded broker filling type with IOC as default and RETURN as fallback"""
-        if not MT5_AVAILABLE:
-            self.log("MT5 not available - using mock filling type", "WARNING")
-            return 0  # Mock value
-            
-        if not self.mt5_connected:
-            return mt5.ORDER_FILLING_IOC
-            
-        try:
-            # Hard-coded ORDER_FILLING_IOC as the default filling type
-            self.log("✅ Using hard-coded filling type: IOC (Immediate or Cancel)")
-            return mt5.ORDER_FILLING_IOC
-            
-        except Exception as e:
-            self.log(f"Error with filling type: {str(e)}", "ERROR")
-            # Fallback to RETURN if IOC fails
-            self.log("⚠️ Using fallback filling type: RETURN", "WARNING")
-            return mt5.ORDER_FILLING_RETURN
+    def detect_broker_filling_type(self) -> None:
+        """Return None to let broker choose filling type automatically"""
+        self.log("✅ Using automatic broker filling type selection (no type_filling)")
+        return None
 
     def connect_mt5(self, max_retries: int = 3, retry_delay: float = 2.0) -> bool:
         """Connect to MetaTrader 5 with retry mechanism and validation"""
@@ -3058,7 +3043,7 @@ class TradingSystem:
                 "magic": 234000,  # Simple magic number parameter
                 "comment": f"AI_v2_{signal.direction}",
                 "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": mt5.ORDER_FILLING_IOC,
+                # "type_filling": mt5.ORDER_FILLING_IOC,  # DISABLED - Let broker choose
             }
             
             # Log order details
@@ -3242,7 +3227,7 @@ class TradingSystem:
                     "magic": 234000,
                     "comment": f"v2.0-close-{ticket}-{attempt + 1}",
                     "type_time": mt5.ORDER_TIME_GTC,
-                    "type_filling": self.filling_type or mt5.ORDER_FILLING_IOC,
+                    # "type_filling": self.filling_type or mt5.ORDER_FILLING_IOC,  # DISABLED - Let broker choose
                 }
                 
                 # Send close order
@@ -3352,7 +3337,7 @@ class TradingSystem:
                 "magic": 234000,  # Simple magic number parameter
                 "comment": f"AI_Trade_{signal.direction}",
                 "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": mt5.ORDER_FILLING_IOC,
+                # "type_filling": mt5.ORDER_FILLING_IOC,  # DISABLED - Let broker choose
             }
             
             # Log order details
@@ -4864,7 +4849,7 @@ class TradingSystem:
                 "magic": 234000,  # Simple magic number parameter
                 "comment": f"Smart_Redirect_{original_signal.direction[:1]}",
                 "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": self.filling_type,
+                # "type_filling": self.filling_type,  # DISABLED - Let broker choose
             }
             
             result = mt5.order_send(request)
@@ -4890,7 +4875,7 @@ class TradingSystem:
                 # Try with different filling type for close orders
                 for filling_type in self.filling_types_priority:
                     if filling_type != self.filling_type:
-                        request["type_filling"] = filling_type
+                        # request["type_filling"] = filling_type  # DISABLED - Let broker choose
                         result = mt5.order_send(request)
                         if result.retcode == mt5.TRADE_RETCODE_DONE:
                             self.log(f"✅ Redirect close successful with {filling_type}")
@@ -5142,7 +5127,7 @@ class TradingSystem:
                 "magic": 234000,  # Simple magic number parameter
                 "comment": f"Smart_{reason[:12]}",
                 "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": self.filling_type,
+                # "type_filling": self.filling_type,  # DISABLED - Let broker choose
             }
             
             result = mt5.order_send(request)
@@ -5155,7 +5140,7 @@ class TradingSystem:
                 # Try with different filling types
                 for filling_type in self.filling_types_priority:
                     if filling_type != self.filling_type:
-                        request["type_filling"] = filling_type
+                        # request["type_filling"] = filling_type  # DISABLED - Let broker choose
                         result = mt5.order_send(request)
                         if result.retcode == mt5.TRADE_RETCODE_DONE:
                             self.log(f"✅ Smart close successful with {filling_type}")
@@ -6256,7 +6241,7 @@ class TradingSystem:
                 "magic": 234000,  # Simple magic number parameter
                 "comment": f"HG_{position.ticket}_{strategy[:4]}",
                 "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": self.filling_type,
+                # "type_filling": self.filling_type,  # DISABLED - Let broker choose
             }
             
             # ส่ง order
@@ -8665,7 +8650,7 @@ class TradingSystem:
                 "magic": 234000,  # Simple magic number parameter
                 "comment": f"EMERGENCY_{signal.direction}",
                 "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": hardcoded_filling,
+                # "type_filling": hardcoded_filling,  # DISABLED - Let broker choose
             }
             
             # Log that we're about to send to broker
