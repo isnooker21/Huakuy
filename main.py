@@ -85,19 +85,27 @@ class InputValidator:
     """Input validation utility class"""
     
     @staticmethod
-    def validate_volume(volume: float, min_volume: float = 0.01, max_volume: float = 100.0) -> float:
-        """Validate trading volume with MT5 compatibility"""
+    def validate_volume(volume: float, min_volume: float = 0.01, max_volume: float = 100.0, logger=None) -> float:
+        """Validate trading volume with MT5 compatibility and enhanced logging"""
+        original_volume = volume
+        
         if not isinstance(volume, (int, float)):
             raise ValidationError(f"Volume must be numeric, got {type(volume)}")
         
         volume = float(volume)
         if volume <= 0:
             raise ValidationError(f"Volume must be positive, got {volume}")
+            
+        # Check and adjust minimum volume with logging
         if volume < min_volume:
-            # Round up to minimum instead of failing
+            if logger:
+                logger(f"⚠️ Lot size {original_volume} below minimum {min_volume}, adjusting to {min_volume}", "WARNING")
             volume = min_volume
+            
+        # Check and adjust maximum volume with logging
         if volume > max_volume:
-            # Cap at maximum instead of failing
+            if logger:
+                logger(f"⚠️ Lot size {original_volume} above maximum {max_volume}, adjusting to {max_volume}", "WARNING")
             volume = max_volume
         
         # Round to 2 decimal places for MT5 compatibility
@@ -106,6 +114,10 @@ class InputValidator:
         # Ensure minimum step compliance (most brokers use 0.01 step)
         volume_steps = round(volume / 0.01) * 0.01
         volume = round(volume_steps, 2)
+        
+        # Log final adjustment if volume changed
+        if logger and abs(original_volume - volume) > 0.001:
+            logger(f"📊 Lot size adjusted from {original_volume} to {volume} (MT5 compliance)", "INFO")
         
         return volume
     
@@ -251,7 +263,8 @@ class TradingSystem:
                 "max_execution_time_ms": 50
             },
             "order_execution": {
-                "magic_number": 234000  # Simple magic number for all orders
+                "magic_number": 234000,  # Simple magic number for all orders
+                "type_filling_fallback": "IOC"  # Options: "IOC", "RETURN", "auto"
             }
         }
         
@@ -1141,10 +1154,38 @@ class TradingSystem:
             self.log(f"Error setting auto-detection state: {str(e)}", "ERROR")
             return False
 
-    def detect_broker_filling_type(self) -> None:
-        """Return None to let broker choose filling type automatically"""
-        self.log("✅ Using automatic broker filling type selection (no type_filling)")
-        return None
+    def detect_broker_filling_type(self) -> int:
+        """Detect appropriate filling type with fallback to ORDER_FILLING_IOC"""
+        try:
+            # Check if we have a configured preference for type_filling
+            if hasattr(self, 'config') and 'order_execution' in self.config:
+                filling_preference = self.config.get('order_execution', {}).get('type_filling_fallback', 'auto')
+                
+                if filling_preference == 'IOC':
+                    if MT5_AVAILABLE and mt5 and hasattr(mt5, 'ORDER_FILLING_IOC'):
+                        self.log("📋 Using configured ORDER_FILLING_IOC", "INFO")
+                        return mt5.ORDER_FILLING_IOC
+                    
+                elif filling_preference == 'RETURN':
+                    if MT5_AVAILABLE and mt5 and hasattr(mt5, 'ORDER_FILLING_RETURN'):
+                        self.log("📋 Using configured ORDER_FILLING_RETURN", "INFO")
+                        return mt5.ORDER_FILLING_RETURN
+            
+            # Default behavior: let broker choose (return None)
+            # But provide fallback if needed
+            if MT5_AVAILABLE and mt5 and hasattr(mt5, 'ORDER_FILLING_IOC'):
+                self.log("📋 Using ORDER_FILLING_IOC as fallback (broker will validate)", "INFO")
+                return mt5.ORDER_FILLING_IOC
+            elif MT5_AVAILABLE and mt5 and hasattr(mt5, 'ORDER_FILLING_RETURN'):
+                self.log("📋 Using ORDER_FILLING_RETURN as fallback", "INFO")
+                return mt5.ORDER_FILLING_RETURN
+            else:
+                self.log("⚠️ No MT5 filling types available, letting broker choose", "WARNING")
+                return None
+                
+        except Exception as e:
+            self.log(f"⚠️ Error detecting filling type: {str(e)}, using automatic selection", "WARNING")
+            return None
 
     def connect_mt5(self, max_retries: int = 3, retry_delay: float = 2.0) -> bool:
         """Connect to MetaTrader 5 with retry mechanism and validation"""
@@ -3009,10 +3050,21 @@ class TradingSystem:
     def execute_normal_order_v2(self, signal: Signal, lot_size: float, decision_details: dict) -> bool:
         """Execute normal order with direct MT5 order sending (v2)"""
         try:
-            # Basic validation
+            # Enhanced lot size validation
             if lot_size <= 0:
-                self.log(f"Invalid lot size: {lot_size}", "ERROR")
+                self.log(f"❌ Invalid lot size: {lot_size}", "ERROR")
                 return False
+            
+            # Check minimum lot size requirement
+            if lot_size < 0.01:
+                self.log(f"⚠️ Lot size {lot_size} below minimum 0.01, adjusting to 0.01", "WARNING")
+                lot_size = 0.01
+            
+            # Final lot size validation
+            validated_lot_size = self._validate_lot_size(lot_size)
+            if validated_lot_size != lot_size:
+                self.log(f"📊 Lot size adjusted during validation: {lot_size} → {validated_lot_size}", "INFO")
+                lot_size = validated_lot_size
             
             if not self.mt5_connected:
                 self.log("MT5 not connected", "ERROR")
@@ -3032,6 +3084,9 @@ class TradingSystem:
             
             price = tick.ask if signal.direction == "BUY" else tick.bid
             
+            # Get appropriate filling type
+            filling_type = self.detect_broker_filling_type()
+            
             # Simple order request
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
@@ -3043,8 +3098,14 @@ class TradingSystem:
                 "magic": 234000,  # Simple magic number parameter
                 "comment": f"AI_v2_{signal.direction}",
                 "type_time": mt5.ORDER_TIME_GTC,
-                # "type_filling": mt5.ORDER_FILLING_IOC,  # DISABLED - Let broker choose
             }
+            
+            # Add type_filling if available
+            if filling_type is not None:
+                request["type_filling"] = filling_type
+                self.log(f"📋 Using type_filling: {filling_type}", "INFO")
+            else:
+                self.log("📋 Letting broker choose filling type automatically", "INFO")
             
             # Log order details
             self.log(f"Sending order: {signal.direction} {lot_size} {active_symbol} @ {price}", "INFO")
@@ -3053,19 +3114,23 @@ class TradingSystem:
             result = mt5.order_send(request)
             
             if result is None:
-                self.log("Order send returned None", "ERROR")
+                self.log("❌ Order send returned None - MT5 connection or request issue", "ERROR")
+                self.log(f"   Signal: {signal.direction}, Symbol: {active_symbol}, Lot: {lot_size}, Price: {price}", "ERROR")
                 return False
             
-            # Check result
+            # Check result with enhanced error logging
             if result.retcode == mt5.TRADE_RETCODE_DONE:
                 confidence = decision_details.get('confidence', 0.0)
                 
-                self.log(f"Order executed: {signal.direction} {lot_size:.2f} lots at {price:.5f}")
-                self.log(f"Ticket: {result.order}, Confidence: {confidence:.1%}")
+                self.log(f"✅ Order executed successfully: {signal.direction} {lot_size:.2f} lots at {price:.5f}")
+                self.log(f"   Ticket: {result.order}, Deal: {getattr(result, 'deal', 'N/A')}, Confidence: {confidence:.1%}")
                 return True
             else:
                 error_desc = self._get_trade_error_description(result.retcode)
-                self.log(f"Order failed: {error_desc} (code: {result.retcode})", "ERROR")
+                self.log(f"❌ Order failed: {error_desc} (code: {result.retcode})", "ERROR")
+                self.log(f"   Signal: {signal.direction}, Symbol: {active_symbol}, Lot: {lot_size}, Price: {price}", "ERROR")
+                if hasattr(result, 'comment') and result.comment:
+                    self.log(f"   Broker comment: {result.comment}", "ERROR")
                 return False
             
         except Exception as e:
@@ -3284,9 +3349,9 @@ class TradingSystem:
         return False
 
     def _validate_lot_size(self, lot_size: float) -> float:
-        """Validate and normalize lot size"""
+        """Validate and normalize lot size with logging"""
         try:
-            return InputValidator.validate_volume(lot_size)
+            return InputValidator.validate_volume(lot_size, logger=self.log)
         except Exception as e:
             self.log(f"Lot size validation error: {str(e)}", "ERROR")
             return self.config["trading_parameters"]["base_lot_size"]
@@ -3307,8 +3372,19 @@ class TradingSystem:
             # Calculate lot size
             lot_size = self.calculate_lot_size(signal)
             if lot_size <= 0:
-                self.log(f"Invalid lot size: {lot_size}", "ERROR")
+                self.log(f"❌ Invalid lot size calculated: {lot_size}", "ERROR")
                 return False
+            
+            # Enhanced lot size validation with minimum check
+            if lot_size < 0.01:
+                self.log(f"⚠️ Lot size {lot_size} below minimum 0.01, adjusting to 0.01", "WARNING")
+                lot_size = 0.01
+            
+            # Final lot size validation
+            validated_lot_size = self._validate_lot_size(lot_size)
+            if validated_lot_size != lot_size:
+                self.log(f"📊 Lot size adjusted during validation: {lot_size} → {validated_lot_size}", "INFO")
+                lot_size = validated_lot_size
             
             # Determine order type
             if signal.direction not in ['BUY', 'SELL']:
@@ -3326,6 +3402,9 @@ class TradingSystem:
             
             price = tick.ask if order_type == mt5.ORDER_TYPE_BUY else tick.bid
             
+            # Get appropriate filling type
+            filling_type = self.detect_broker_filling_type()
+            
             # Simple order request
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
@@ -3337,8 +3416,14 @@ class TradingSystem:
                 "magic": 234000,  # Simple magic number parameter
                 "comment": f"AI_Trade_{signal.direction}",
                 "type_time": mt5.ORDER_TIME_GTC,
-                # "type_filling": mt5.ORDER_FILLING_IOC,  # DISABLED - Let broker choose
             }
+            
+            # Add type_filling if available
+            if filling_type is not None:
+                request["type_filling"] = filling_type
+                self.log(f"📋 Using type_filling: {filling_type}", "INFO")
+            else:
+                self.log("📋 Letting broker choose filling type automatically", "INFO")
             
             # Log order details
             self.log(f"Sending order: {signal.direction} {lot_size} {active_symbol} @ {price}", "INFO")
@@ -3347,21 +3432,25 @@ class TradingSystem:
             result = mt5.order_send(request)
             
             if result is None:
-                self.log("Order send returned None", "ERROR")
+                self.log("❌ Order send returned None - MT5 connection or request issue", "ERROR")
+                self.log(f"   Signal: {signal.direction}, Symbol: {active_symbol}, Lot: {lot_size}, Price: {price}", "ERROR")
                 return False
             
-            # Check result
+            # Check result with enhanced error logging
             if result.retcode == mt5.TRADE_RETCODE_DONE:
                 self.total_signals += 1
                 self.last_signal_time = datetime.now()
                 self.hourly_signals.append(datetime.now())
                 
-                self.log(f"Order executed: {signal.direction} {lot_size} lots at {price}")
-                self.log(f"Ticket: {result.order}")
+                self.log(f"✅ Order executed successfully: {signal.direction} {lot_size} lots at {price}")
+                self.log(f"   Ticket: {result.order}, Deal: {getattr(result, 'deal', 'N/A')}")
                 return True
             else:
                 error_desc = self._get_trade_error_description(result.retcode)
-                self.log(f"Order failed: {error_desc} (code: {result.retcode})", "ERROR")
+                self.log(f"❌ Order failed: {error_desc} (code: {result.retcode})", "ERROR")
+                self.log(f"   Signal: {signal.direction}, Symbol: {active_symbol}, Lot: {lot_size}, Price: {price}", "ERROR")
+                if hasattr(result, 'comment') and result.comment:
+                    self.log(f"   Broker comment: {result.comment}", "ERROR")
                 return False
             
         except Exception as e:
@@ -3370,7 +3459,8 @@ class TradingSystem:
     
     
     def _get_trade_error_description(self, retcode: int) -> str:
-        """Get human-readable description of trade error code"""
+        """Get human-readable description of trade error code with safe attribute checking"""
+        # Base error descriptions that are guaranteed to exist
         error_descriptions = {
             mt5.TRADE_RETCODE_REQUOTE: "Requote",
             mt5.TRADE_RETCODE_REJECT: "Request rejected",
@@ -3404,9 +3494,15 @@ class TradingSystem:
             mt5.TRADE_RETCODE_LIMIT_VOLUME: "Volume limit reached",
             mt5.TRADE_RETCODE_INVALID_ORDER: "Invalid order",
             mt5.TRADE_RETCODE_POSITION_CLOSED: "Position closed",
-            # Add additional error codes referenced in retry logic
-            mt5.TRADE_RETCODE_TRADE_TIMEOUT: "Trade timeout",
         }
+        
+        # Safely add TRADE_RETCODE_TRADE_TIMEOUT if it exists in the MT5 module
+        if MT5_AVAILABLE and mt5 and hasattr(mt5, 'TRADE_RETCODE_TRADE_TIMEOUT'):
+            error_descriptions[mt5.TRADE_RETCODE_TRADE_TIMEOUT] = "Trade timeout"
+        else:
+            # Log warning if the attribute doesn't exist but code is trying to use it
+            if retcode == getattr(mt5, 'TRADE_RETCODE_TRADE_TIMEOUT', None):
+                self.log("⚠️ TRADE_RETCODE_TRADE_TIMEOUT attribute not available in MT5 module, using fallback", "WARNING")
         
         return error_descriptions.get(retcode, f"Unknown error code: {retcode}")
 
@@ -4260,11 +4356,12 @@ class TradingSystem:
             return 1.0
 
     def _validate_lot_size(self, lot_size: float) -> float:
-        """Validate and adjust lot size according to broker requirements"""
+        """Validate and adjust lot size according to broker requirements with logging"""
         try:
-            # Use the existing validation logic
-            return InputValidator.validate_volume(lot_size)
+            # Use the existing validation logic with logging
+            return InputValidator.validate_volume(lot_size, logger=self.log)
         except:
+            self.log(f"⚠️ Lot size validation failed, using fallback: max(0.01, min(0.1, {lot_size}))", "WARNING")
             return max(0.01, min(0.1, lot_size))
 
     def _calculate_positions_hash(self) -> float:
