@@ -157,6 +157,7 @@ class TradingSystem:
         self.successful_signals = 0
         self.last_signal_time = None
         self.hourly_signals = []
+        self.last_reset_date = datetime.now().date()  # Track when daily counters were last reset
         
         # Portfolio tracking
         self.positions: List[Position] = []
@@ -1722,9 +1723,41 @@ class TradingSystem:
         except Exception as e:
             return False
 
+    def reset_daily_counters(self):
+        """Reset daily trading counters for a new trading day"""
+        try:
+            old_daily_trades = self.daily_trades
+            self.daily_trades = 0
+            self.last_reset_date = datetime.now().date()
+            
+            if old_daily_trades > 0:
+                self.log(f"🔄 Daily counters reset: {old_daily_trades} → 0 trades for new day", "INFO")
+            
+        except Exception as e:
+            self.log(f"Error resetting daily counters: {str(e)}", "ERROR")
+
+    def check_and_reset_daily_counters(self):
+        """Check if it's a new day and reset daily counters if needed"""
+        try:
+            current_date = datetime.now().date()
+            
+            # If current date is different from last reset date, reset counters
+            if current_date != self.last_reset_date:
+                self.reset_daily_counters()
+                return True
+            
+            return False
+            
+        except Exception as e:
+            self.log(f"Error checking daily reset: {str(e)}", "ERROR")
+            return False
+
     def can_trade(self) -> bool:
         """Check if trading is allowed based on various conditions"""
         try:
+            # Check and reset daily counters if it's a new day
+            self.check_and_reset_daily_counters()
+            
             # Check basic conditions
             if not self.mt5_connected or not self.trading_active:
                 return False
@@ -2861,6 +2894,12 @@ class TradingSystem:
                     except Exception as health_error:
                         self.log(f"Health check error: {str(health_error)}", "ERROR")
                 
+                # 📅 Daily Reset Check (check every cycle for immediate response)
+                try:
+                    self.check_and_reset_daily_counters()
+                except Exception as reset_error:
+                    self.log(f"Daily reset check error: {str(reset_error)}", "ERROR")
+                
                 # 🔗 Connection Health Check
                 if (datetime.now() - last_connection_check).seconds >= self.connection_check_interval:
                     if not self.check_mt5_connection_health():
@@ -3040,6 +3079,10 @@ class TradingSystem:
                 conditions.append(f"❌ Daily trade limit: {self.daily_trades}/{self.max_daily_trades}")
             else:
                 conditions.append(f"✅ Daily trades OK: {self.daily_trades}/{self.max_daily_trades}")
+            
+            # Date tracking debug info
+            current_date = datetime.now().date()
+            conditions.append(f"📅 Last reset: {self.last_reset_date}, Current: {current_date}")
                 
             # Signal cooldown
             if self.last_signal_time:
@@ -4129,6 +4172,7 @@ class TradingSystem:
                 
                 # Statistics (with defaults)
                 "daily_trades": getattr(self, 'daily_trades', 0),
+                "last_reset_date": getattr(self, 'last_reset_date', datetime.now().date()).isoformat(),
                 "total_signals": getattr(self, 'total_signals', 0),
                 "successful_signals": getattr(self, 'successful_signals', 0),
                 "last_signal_time": self.last_signal_time.isoformat() if getattr(self, 'last_signal_time', None) else None,
@@ -4300,6 +4344,18 @@ class TradingSystem:
             
             # Statistics with validation
             self.daily_trades = self._validate_int(state_data.get("daily_trades", 0), min_val=0)
+            
+            # Load and validate last_reset_date
+            if state_data.get("last_reset_date"):
+                try:
+                    self.last_reset_date = datetime.fromisoformat(state_data["last_reset_date"]).date()
+                except ValueError as e:
+                    self.log(f"Invalid last_reset_date format: {e}, using current date", "WARNING")
+                    self.last_reset_date = datetime.now().date()
+            else:
+                # Default to current date if not found
+                self.last_reset_date = datetime.now().date()
+            
             self.total_signals = self._validate_int(state_data.get("total_signals", 0), min_val=0)
             self.successful_signals = self._validate_int(state_data.get("successful_signals", 0), min_val=0)
             
