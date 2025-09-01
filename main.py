@@ -2663,7 +2663,9 @@ class TradingSystem:
             return False
 
     def execute_normal_order_v2(self, signal: Signal, lot_size: float, decision_details: dict) -> bool:
-        """🚀 Enhanced normal order execution with unified lot size"""
+        """🚀 Enhanced normal order execution with improved symbol management and error handling"""
+        start_time = time.time()
+        
         try:
             # Validate lot size
             lot_size = self._validate_lot_size(lot_size)
@@ -2672,46 +2674,64 @@ class TradingSystem:
                 self.log("❌ MT5 not connected for order execution", "ERROR")
                 return False
             
+            # Enhanced connection and symbol health check
+            if not self.check_mt5_connection_health(include_symbol_check=True):
+                self.log("❌ MT5 connection or symbol health check failed", "ERROR")
+                return False
+            
+            # Use current active symbol (may be fallback)
+            active_symbol = self.current_symbol
+            self.log(f"📊 Executing order for {active_symbol} (originally {signal.symbol})", "DEBUG")
+            
             # Determine order type
             order_type = mt5.ORDER_TYPE_BUY if signal.direction == "BUY" else mt5.ORDER_TYPE_SELL
             
-            # Get current market price with retry
-            symbol_info = self.get_symbol_info_with_retry(signal.symbol)
+            # Get current market price with enhanced retry and fallback
+            symbol_info = self.get_symbol_info_with_retry(active_symbol)
             if symbol_info is None:
-                self.log(f"❌ Cannot get symbol info for {signal.symbol}", "ERROR")
+                self.log(f"❌ Cannot get symbol info for {active_symbol} or any fallbacks", "ERROR")
                 return False
             
-            # Get current tick
-            tick = mt5.symbol_info_tick(signal.symbol)
+            # Enhanced tick data retrieval with retry
+            tick = self._get_tick_data_with_retry(active_symbol)
             if tick is None:
-                self.log(f"❌ Cannot get tick data for {signal.symbol}", "ERROR")
+                self.log(f"❌ Cannot get tick data for {active_symbol}", "ERROR")
                 return False
             
-            # Set price based on signal direction
+            # Set price based on signal direction with enhanced validation
             if signal.direction == "BUY":
                 price = tick.ask
+                if price <= 0:
+                    self.log(f"❌ Invalid ask price: {price}", "ERROR")
+                    return False
             else:
                 price = tick.bid
+                if price <= 0:
+                    self.log(f"❌ Invalid bid price: {price}", "ERROR")
+                    return False
             
-            # Create order request
+            # Enhanced order request with symbol validation
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": signal.symbol,
+                "symbol": active_symbol,  # Use active symbol instead of original
                 "volume": lot_size,
                 "type": order_type,
                 "price": price,
-                "deviation": 10,  # Allow 10 points price deviation
+                "deviation": 20,  # Increased deviation for better execution
                 "magic": 234000,
-                "comment": f"v2.0-{signal.reason[:30]}",  # Include unified decision info
+                "comment": f"v2.0-{signal.reason[:30]}",
                 "type_time": mt5.ORDER_TIME_GTC,
                 "type_filling": self.filling_type or mt5.ORDER_FILLING_IOC,
             }
             
-            # Execute order
-            result = mt5.order_send(request)
+            # Log order details for debugging
+            self.log(f"📤 Sending order: {signal.direction} {lot_size} {active_symbol} @ {price:.5f}", "INFO")
+            
+            # Execute order with enhanced error handling
+            result = self._execute_order_with_retry(request, max_attempts=3)
             
             if result is None:
-                self.log("❌ Order send failed - no result", "ERROR")
+                self.log("❌ Order execution failed after all attempts", "ERROR")
                 return False
             
             if result.retcode != mt5.TRADE_RETCODE_DONE:
@@ -8171,6 +8191,122 @@ class TradingSystem:
         except Exception as e:
             self.log(f"Error getting smart HG analytics: {str(e)}", "ERROR")
             return {}
+
+    def _get_tick_data_with_retry(self, symbol: str, max_attempts: int = 3) -> Optional[Any]:
+        """Get tick data with retry mechanism"""
+        for attempt in range(max_attempts):
+            try:
+                tick = mt5.symbol_info_tick(symbol)
+                if tick is not None:
+                    return tick
+                
+                self.log(f"Tick data request failed for {symbol} (attempt {attempt + 1})", "WARNING")
+                if attempt < max_attempts - 1:
+                    time.sleep(0.1)  # Short delay between attempts
+                    
+            except Exception as e:
+                self.log(f"Exception getting tick data for {symbol} (attempt {attempt + 1}): {str(e)}", "ERROR")
+                if attempt < max_attempts - 1:
+                    time.sleep(0.1)
+        
+        return None
+
+    def _execute_order_with_retry(self, request: dict, max_attempts: int = 3) -> Optional[Any]:
+        """Execute order with retry mechanism for transient failures"""
+        for attempt in range(max_attempts):
+            try:
+                result = mt5.order_send(request)
+                
+                if result is None:
+                    self.log(f"Order send returned None (attempt {attempt + 1})", "WARNING")
+                    if attempt < max_attempts - 1:
+                        time.sleep(0.5)  # Wait before retry
+                        continue
+                    return None
+                
+                # Check for transient errors that can be retried
+                if result.retcode in [
+                    mt5.TRADE_RETCODE_REQUOTE,     # Requote
+                    mt5.TRADE_RETCODE_TIMEOUT,     # Timeout  
+                    mt5.TRADE_RETCODE_PRICE_CHANGED, # Price changed
+                    mt5.TRADE_RETCODE_CONNECTION,   # Connection issues
+                ]:
+                    self.log(f"Transient error {result.retcode}, retrying (attempt {attempt + 1})", "WARNING")
+                    if attempt < max_attempts - 1:
+                        # Update price for retry
+                        tick = self._get_tick_data_with_retry(request["symbol"])
+                        if tick is not None:
+                            if request["type"] == mt5.ORDER_TYPE_BUY:
+                                request["price"] = tick.ask
+                            else:
+                                request["price"] = tick.bid
+                        time.sleep(0.5)
+                        continue
+                
+                return result
+                
+            except Exception as e:
+                self.log(f"Exception during order execution (attempt {attempt + 1}): {str(e)}", "ERROR")
+                if attempt < max_attempts - 1:
+                    time.sleep(0.5)
+        
+        return None
+
+    def integrated_symbol_monitoring(self):
+        """Integrated symbol monitoring for the trading loop"""
+        try:
+            # Perform periodic symbol health check (every 5 minutes)
+            self.periodic_symbol_health_check()
+            
+            # Log symbol statistics every 30 successful operations or every hour
+            if (self.symbol_operation_stats['successful_requests'] > 0 and 
+                self.symbol_operation_stats['successful_requests'] % 30 == 0):
+                self.log_symbol_operation_status()
+            
+            # Clear old cache entries periodically
+            current_time = time.time()
+            expired_symbols = []
+            for symbol, cache_entry in self.symbol_cache.items():
+                if current_time - cache_entry['timestamp'] > self.symbol_cache_ttl:
+                    expired_symbols.append(symbol)
+            
+            for symbol in expired_symbols:
+                del self.symbol_cache[symbol]
+                
+            if expired_symbols:
+                self.log(f"🧹 Cleaned {len(expired_symbols)} expired cache entries", "DEBUG")
+                
+        except Exception as e:
+            self.log(f"Error in integrated symbol monitoring: {str(e)}", "ERROR")
+
+    def get_enhanced_system_status(self) -> Dict[str, Any]:
+        """Get comprehensive system status including symbol management"""
+        try:
+            base_status = {
+                'mt5_connected': self.mt5_connected,
+                'trading_active': self.trading_active,
+                'current_symbol': self.current_symbol,
+                'total_positions': len(self.positions),
+                'buy_volume': self.buy_volume,
+                'sell_volume': self.sell_volume,
+                'portfolio_health': self.portfolio_health
+            }
+            
+            # Add symbol operation statistics
+            symbol_stats = self.get_symbol_operation_stats()
+            base_status['symbol_management'] = {
+                'success_rate': symbol_stats['success_rate'],
+                'cache_hit_rate': symbol_stats['cache_hit_rate'],
+                'fallback_usage': symbol_stats['fallback_usage_rate'],
+                'avg_response_time': symbol_stats['average_response_time'],
+                'available_symbols': sum(1 for status in symbol_stats['symbols_status'].values() if status['available'])
+            }
+            
+            return base_status
+            
+        except Exception as e:
+            self.log(f"Error getting enhanced system status: {str(e)}", "ERROR")
+            return {'error': str(e)}
 
 class TradingGUI:
     def __init__(self):
