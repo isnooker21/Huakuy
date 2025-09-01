@@ -1727,11 +1727,11 @@ class TradingSystem:
         """Reset daily trading counters for a new trading day"""
         try:
             old_daily_trades = self.daily_trades
+            old_reset_date = self.last_reset_date
             self.daily_trades = 0
             self.last_reset_date = datetime.now().date()
             
-            if old_daily_trades > 0:
-                self.log(f"🔄 Daily counters reset: {old_daily_trades} → 0 trades for new day", "INFO")
+            self.log(f"🔄 Daily counters reset: {old_daily_trades} → 0 trades (date: {old_reset_date} → {self.last_reset_date})", "INFO")
             
         except Exception as e:
             self.log(f"Error resetting daily counters: {str(e)}", "ERROR")
@@ -1741,8 +1741,12 @@ class TradingSystem:
         try:
             current_date = datetime.now().date()
             
+            # Debug logging for daily counter check
+            self.log(f"🗓️ Daily counter check: current={current_date}, last_reset={self.last_reset_date}, daily_trades={self.daily_trades}", "DEBUG")
+            
             # If current date is different from last reset date, reset counters
             if current_date != self.last_reset_date:
+                self.log(f"📅 New day detected, resetting daily counters...", "INFO")
                 self.reset_daily_counters()
                 return True
             
@@ -4285,15 +4289,27 @@ class TradingSystem:
                 
                 if os.path.exists(backup_file):
                     self.log(f"📝 Main state file not found, trying backup: {backup_file}")
-                    return self._load_state_from_file(backup_file)
+                    success = self._load_state_from_file(backup_file)
+                    if success:
+                        # Check and reset daily counters after successful loading
+                        self.check_and_reset_daily_counters()
+                    return success
                 elif os.path.exists(old_backup):
                     self.log(f"📝 Trying old backup: {old_backup}")
-                    return self._load_state_from_file(old_backup)
+                    success = self._load_state_from_file(old_backup)
+                    if success:
+                        # Check and reset daily counters after successful loading
+                        self.check_and_reset_daily_counters()
+                    return success
                 else:
                     self.log(f"📝 No previous state found ({self.state_file})")
                     return False
             
-            return self._load_state_from_file(self.state_file)
+            success = self._load_state_from_file(self.state_file)
+            if success:
+                # Check and reset daily counters after successful loading
+                self.check_and_reset_daily_counters()
+            return success
             
         except Exception as e:
             self.log(f"❌ Error loading state: {str(e)}", "ERROR")
@@ -4303,7 +4319,11 @@ class TradingSystem:
                 if os.path.exists(backup_file):
                     try:
                         self.log(f"🔄 Attempting recovery from {backup_file}")
-                        return self._load_state_from_file(backup_file)
+                        success = self._load_state_from_file(backup_file)
+                        if success:
+                            # Check and reset daily counters after successful backup loading
+                            self.check_and_reset_daily_counters()
+                        return success
                     except Exception as backup_error:
                         self.log(f"❌ Backup recovery failed: {backup_error}", "ERROR")
                         continue
