@@ -62,6 +62,20 @@ def serialize_datetime_dict(data):
         return data.isoformat()
     return data
 
+def safe_parse_datetime(date_value):
+    """Safely parse datetime value from string or datetime object"""
+    try:
+        if isinstance(date_value, datetime):
+            return date_value
+        elif isinstance(date_value, str):
+            return datetime.fromisoformat(date_value)
+        else:
+            logger.warning(f"Invalid datetime type: {type(date_value)}, returning current time")
+            return datetime.now()
+    except (ValueError, TypeError) as e:
+        logger.error(f"Error parsing datetime '{date_value}': {e}, returning current time")
+        return datetime.now()
+
 class ValidationError(Exception):
     """Custom validation error"""
     pass
@@ -1974,15 +1988,20 @@ class TradingSystem:
             
             # 2. Age Factor (15 points)
             if position.ticket in self.position_tracker:
-                age_hours = (datetime.now() - self.position_tracker[position.ticket]['birth_time']).total_seconds() / 3600
-                if age_hours < 2:
-                    score_details['age_score'] = 5  # Too young
-                elif age_hours < 12:
-                    score_details['age_score'] = 15  # Perfect age
-                elif age_hours < 24:
-                    score_details['age_score'] = 10  # Getting old
-                else:
-                    score_details['age_score'] = 5   # Too old
+                try:
+                    birth_time = safe_parse_datetime(self.position_tracker[position.ticket]['birth_time'])
+                    age_hours = (datetime.now() - birth_time).total_seconds() / 3600
+                    if age_hours < 2:
+                        score_details['age_score'] = 5  # Too young
+                    elif age_hours < 12:
+                        score_details['age_score'] = 15  # Perfect age
+                    elif age_hours < 24:
+                        score_details['age_score'] = 10  # Getting old
+                    else:
+                        score_details['age_score'] = 5   # Too old
+                except Exception as age_error:
+                    self.log(f"Warning: Could not calculate age factor for position {position.ticket}: {age_error}", "WARNING")
+                    score_details['age_score'] = 5  # Default score
             
             # 3. Market Alignment (20 points)
             market_data = self.get_market_data()
@@ -2356,42 +2375,79 @@ class TradingSystem:
             self.sell_volume = 0.0
             
             for pos in positions:
-                current_price = mt5.symbol_info_tick(self.symbol).bid if pos.type == 1 else mt5.symbol_info_tick(self.symbol).ask
-                profit_per_lot = pos.profit / pos.volume if pos.volume > 0 else 0
+                try:
+                    # Get current price with error handling
+                    tick_info = mt5.symbol_info_tick(self.symbol)
+                    if tick_info is None:
+                        self.log(f"Warning: Could not get tick info for {self.symbol}", "WARNING")
+                        current_price = pos.price_open  # Fallback to open price
+                    else:
+                        current_price = tick_info.bid if pos.type == 1 else tick_info.ask
+                    
+                    # Calculate profit per lot with validation
+                    if pos.volume > 0:
+                        profit_per_lot = pos.profit / pos.volume
+                        # Round to 2 decimal places for currency consistency
+                        profit_per_lot = round(profit_per_lot, 2)
+                    else:
+                        self.log(f"Warning: Position {pos.ticket} has zero volume", "WARNING")
+                        profit_per_lot = 0
+                    
+                    # Add debugging log for profit per lot calculation
+                    if self.verbose_logging:
+                        self.log(f"Position {pos.ticket}: Profit=${pos.profit:.2f}, Volume={pos.volume:.2f}, $/Lot=${profit_per_lot:.2f}", "DEBUG")
+                        
+                except Exception as calc_error:
+                    self.log(f"Error calculating profit per lot for position {pos.ticket}: {calc_error}", "ERROR")
+                    current_price = pos.price_open
+                    profit_per_lot = 0
                 
-                # Classify efficiency
-                if profit_per_lot > 100:
-                    efficiency = "excellent"
-                elif profit_per_lot > 50:
-                    efficiency = "good"
-                elif profit_per_lot > 0:
-                    efficiency = "fair"
-                else:
+                # Classify efficiency with error handling
+                try:
+                    if profit_per_lot > 100:
+                        efficiency = "excellent"
+                    elif profit_per_lot > 50:
+                        efficiency = "good"
+                    elif profit_per_lot > 0:
+                        efficiency = "fair"
+                    else:
+                        efficiency = "poor"
+                except Exception as efficiency_error:
+                    self.log(f"Error classifying efficiency for position {pos.ticket}: {efficiency_error}", "ERROR")
                     efficiency = "poor"
                 
-                # Assign role (simplified logic)
-                role = self.assign_position_role(pos, profit_per_lot)
+                # Assign role (simplified logic) with error handling
+                try:
+                    role = self.assign_position_role(pos, profit_per_lot)
+                except Exception as role_error:
+                    self.log(f"Error assigning role for position {pos.ticket}: {role_error}", "ERROR")
+                    role = "UNKNOWN"
                 
-                position = Position(
-                    ticket=pos.ticket,
-                    symbol=pos.symbol,
-                    type="BUY" if pos.type == 0 else "SELL",
-                    volume=pos.volume,
-                    open_price=pos.price_open,
-                    current_price=current_price,
-                    profit=pos.profit,
-                    profit_per_lot=profit_per_lot,
-                    role=role,
-                    efficiency=efficiency
-                )
-                
-                self.positions.append(position)
-                
-                # Update volume counters
-                if pos.type == 0:  # BUY
-                    self.buy_volume += pos.volume
-                else:  # SELL
-                    self.sell_volume += pos.volume
+                try:
+                    position = Position(
+                        ticket=pos.ticket,
+                        symbol=pos.symbol,
+                        type="BUY" if pos.type == 0 else "SELL",
+                        volume=pos.volume,
+                        open_price=pos.price_open,
+                        current_price=current_price,
+                        profit=pos.profit,
+                        profit_per_lot=profit_per_lot,
+                        role=role,
+                        efficiency=efficiency
+                    )
+                    
+                    self.positions.append(position)
+                    
+                    # Update volume counters
+                    if pos.type == 0:  # BUY
+                        self.buy_volume += pos.volume
+                    else:  # SELL
+                        self.sell_volume += pos.volume
+                        
+                except Exception as position_error:
+                    self.log(f"Error creating position object for {pos.ticket}: {position_error}", "ERROR")
+                    continue
             
             # Calculate portfolio health
             self.calculate_portfolio_health()
@@ -2408,14 +2464,23 @@ class TradingSystem:
 
     def assign_position_role(self, position, profit_per_lot: float) -> str:
         """Assign role to position based on performance"""
-        if profit_per_lot > 100:
-            return OrderRole.MAIN.value
-        elif profit_per_lot > 0:
+        try:
+            # Validate profit_per_lot is a valid number
+            if not isinstance(profit_per_lot, (int, float)) or profit_per_lot != profit_per_lot:  # Check for NaN
+                self.log(f"Warning: Invalid profit_per_lot {profit_per_lot} for position {getattr(position, 'ticket', 'unknown')}", "WARNING")
+                return OrderRole.SUPPORT.value
+            
+            if profit_per_lot > 100:
+                return OrderRole.MAIN.value
+            elif profit_per_lot > 0:
+                return OrderRole.SUPPORT.value
+            elif profit_per_lot > -50:
+                return OrderRole.HEDGE_GUARD.value
+            else:
+                return OrderRole.SACRIFICE.value
+        except Exception as e:
+            self.log(f"Error assigning position role: {e}", "ERROR")
             return OrderRole.SUPPORT.value
-        elif profit_per_lot > -50:
-            return OrderRole.HEDGE_GUARD.value
-        else:
-            return OrderRole.SACRIFICE.value
 
     def calculate_portfolio_health(self):
         """Calculate overall portfolio health score"""
@@ -2795,9 +2860,13 @@ class TradingSystem:
             
             # 3. Age score (15 points)
             if position.ticket in self.position_tracker:
-                age_hours = (datetime.now() - self.position_tracker[position.ticket]['birth_time']).total_seconds() / 3600
-                if age_hours > 12:
-                    score += min(15, age_hours / 2)
+                try:
+                    birth_time = safe_parse_datetime(self.position_tracker[position.ticket]['birth_time'])
+                    age_hours = (datetime.now() - birth_time).total_seconds() / 3600
+                    if age_hours > 12:
+                        score += min(15, age_hours / 2)
+                except Exception as age_error:
+                    self.log(f"Warning: Could not calculate age score for position {position.ticket}: {age_error}", "WARNING")
             
             # 4. Portfolio health bonus (15 points)
             if self.portfolio_health < 50 and profit_pct > 0:
@@ -3063,11 +3132,15 @@ class TradingSystem:
                 score -= 10
             
             # 4. Age factor
-            age_hours = (datetime.now() - tracker['birth_time']).total_seconds() / 3600
-            if age_hours > self.max_hold_hours:
-                score -= 20
-            elif age_hours > 24:
-                score -= 10
+            try:
+                birth_time = safe_parse_datetime(tracker['birth_time'])
+                age_hours = (datetime.now() - birth_time).total_seconds() / 3600
+                if age_hours > self.max_hold_hours:
+                    score -= 20
+                elif age_hours > 24:
+                    score -= 10
+            except Exception as age_error:
+                self.log(f"Warning: Could not calculate age factor for hold score: {age_error}", "WARNING")
             
             return max(0, min(100, score))
             
@@ -3741,11 +3814,17 @@ class TradingSystem:
             # 3. Age factor (15 points)
             if (profit_pos.ticket in self.position_tracker and 
                 loss_pos.ticket in self.position_tracker):
-                profit_age = (datetime.now() - self.position_tracker[profit_pos.ticket]['birth_time']).total_seconds() / 3600
-                loss_age = (datetime.now() - self.position_tracker[loss_pos.ticket]['birth_time']).total_seconds() / 3600
-                avg_age = (profit_age + loss_age) / 2
-                if avg_age > 6:  # หลัง 6 ชั่วโมง
-                    score += min(15, avg_age / 2)
+                try:
+                    profit_birth_time = safe_parse_datetime(self.position_tracker[profit_pos.ticket]['birth_time'])
+                    loss_birth_time = safe_parse_datetime(self.position_tracker[loss_pos.ticket]['birth_time'])
+                    
+                    profit_age = (datetime.now() - profit_birth_time).total_seconds() / 3600
+                    loss_age = (datetime.now() - loss_birth_time).total_seconds() / 3600
+                    avg_age = (profit_age + loss_age) / 2
+                    if avg_age > 6:  # หลัง 6 ชั่วโมง
+                        score += min(15, avg_age / 2)
+                except Exception as age_error:
+                    self.log(f"Warning: Could not calculate age factor in pair score: {age_error}", "WARNING")
             
             # 4. Portfolio health bonus (15 points)
             if self.portfolio_health < 50:
@@ -3914,13 +3993,19 @@ class TradingSystem:
             
             # 5. Age factor (10 points)
             avg_age = 0
+            valid_ages = 0
             for pos in positions:
                 if pos.ticket in self.position_tracker:
-                    age_hours = (datetime.now() - self.position_tracker[pos.ticket]['birth_time']).total_seconds() / 3600
-                    avg_age += age_hours
+                    try:
+                        birth_time = safe_parse_datetime(self.position_tracker[pos.ticket]['birth_time'])
+                        age_hours = (datetime.now() - birth_time).total_seconds() / 3600
+                        avg_age += age_hours
+                        valid_ages += 1
+                    except Exception as age_error:
+                        self.log(f"Warning: Could not calculate age for position {pos.ticket}: {age_error}", "WARNING")
             
-            if len(positions) > 0:
-                avg_age /= len(positions)
+            if valid_ages > 0:
+                avg_age /= valid_ages
                 if avg_age > 12:
                     score += min(10, avg_age / 2)
             
@@ -5692,9 +5777,13 @@ class TradingSystem:
             
             # วิเคราะห์เวลาที่ติดลบ
             if position.ticket in self.position_tracker:
-                birth_time = self.position_tracker[position.ticket]['birth_time']
-                loss_duration = (datetime.now() - birth_time).total_seconds() / 3600
-                analysis['time_in_loss'] = loss_duration
+                try:
+                    birth_time = safe_parse_datetime(self.position_tracker[position.ticket]['birth_time'])
+                    loss_duration = (datetime.now() - birth_time).total_seconds() / 3600
+                    analysis['time_in_loss'] = loss_duration
+                except Exception as time_error:
+                    self.log(f"Warning: Could not calculate loss duration for position {position.ticket}: {time_error}", "WARNING")
+                    analysis['time_in_loss'] = 0
             
             # ประเมินความรุนแรง
             if loss_amount >= 500:
@@ -5908,8 +5997,12 @@ class TradingSystem:
             # 1. Position Age Analysis
             age_hours = 0
             if position.ticket in self.position_tracker:
-                birth_time = self.position_tracker[position.ticket]['birth_time']
-                age_hours = (datetime.now() - birth_time).total_seconds() / 3600
+                try:
+                    birth_time = safe_parse_datetime(self.position_tracker[position.ticket]['birth_time'])
+                    age_hours = (datetime.now() - birth_time).total_seconds() / 3600
+                except Exception as age_error:
+                    self.log(f"Warning: Could not calculate position age for timing analysis: {age_error}", "WARNING")
+                    age_hours = 0
             
             if age_hours < 1:
                 timing['best_timing'] = 'WAIT'
