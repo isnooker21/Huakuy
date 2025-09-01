@@ -1745,13 +1745,14 @@ class TradingSystem:
                 self.log("Hourly signal limit reached", "WARNING")
                 return False
             
-            # Check margin level
-            account_info = mt5.account_info()
-            if account_info and account_info.margin != 0:
-                margin_level = (account_info.equity / account_info.margin) * 100
-                if margin_level < self.min_margin_level:
-                    self.log(f"Low margin level: {margin_level:.1f}%", "WARNING")
-                    return False
+            # Check margin level (only if MT5 is available)
+            if MT5_AVAILABLE and mt5:
+                account_info = mt5.account_info()
+                if account_info and account_info.margin != 0:
+                    margin_level = (account_info.equity / account_info.margin) * 100
+                    if margin_level < self.min_margin_level:
+                        self.log(f"Low margin level: {margin_level:.1f}%", "WARNING")
+                        return False
             
             return True
             
@@ -1979,7 +1980,7 @@ class TradingSystem:
 
     def update_positions(self):
         """Update position data and calculate metrics"""
-        if not self.mt5_connected:
+        if not self.mt5_connected or not MT5_AVAILABLE or not mt5:
             return
             
         try:
@@ -3046,16 +3047,19 @@ class TradingSystem:
             else:
                 conditions.append(f"✅ Hourly signals OK: {recent_count}/{self.max_signals_per_hour}")
                 
-            # Margin check
-            account_info = mt5.account_info()
-            if account_info and account_info.margin > 0:
-                margin_level = (account_info.equity / account_info.margin) * 100
-                if margin_level < self.min_margin_level:
-                    conditions.append(f"❌ Low margin: {margin_level:.1f}%")
+            # Margin check (only if MT5 is available)
+            if MT5_AVAILABLE and mt5:
+                account_info = mt5.account_info()
+                if account_info and account_info.margin > 0:
+                    margin_level = (account_info.equity / account_info.margin) * 100
+                    if margin_level < self.min_margin_level:
+                        conditions.append(f"❌ Low margin: {margin_level:.1f}%")
+                    else:
+                        conditions.append(f"✅ Margin OK: {margin_level:.1f}%")
                 else:
-                    conditions.append(f"✅ Margin OK: {margin_level:.1f}%")
+                    conditions.append("✅ No margin used")
             else:
-                conditions.append("✅ No margin used")
+                conditions.append("✅ MT5 not available - margin check skipped")
                 
             self.log("🔍 TRADE CONDITIONS DEBUG:")
             for condition in conditions:
@@ -5018,7 +5022,7 @@ class TradingSystem:
     def sync_with_mt5_positions(self):
         """🔄 ซิงค์ข้อมูลกับ positions จริงใน MT5"""
         try:
-            if not self.mt5_connected:
+            if not self.mt5_connected or not MT5_AVAILABLE or not mt5:
                 return
             
             # ดึง positions จริงจาก MT5
