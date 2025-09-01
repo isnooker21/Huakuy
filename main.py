@@ -251,7 +251,7 @@ class TradingSystem:
                 "max_execution_time_ms": 50
             },
             "order_execution": {
-                "max_retry_attempts": 3,  # Reduced from 5 to 3
+                "max_retry_attempts": 2,  # Reduced from 3 to 2 for faster execution
                 "base_retry_delay": 0.5,
                 "max_retry_delay": 8.0,
                 "exponential_backoff": True,
@@ -266,7 +266,8 @@ class TradingSystem:
         }
         
         # Legacy compatibility - map config to existing variables
-        self.symbol = self.config["trading_parameters"]["symbol"]
+        # Temporary workaround: hard-code symbol to XAUUSD.v for reliability
+        self.symbol = "XAUUSD.v"  # Hard-coded as per temporary workaround instructions
         self.base_lot = self.config["trading_parameters"]["base_lot_size"]
         self.max_positions = self.config["trading_parameters"]["max_positions"]
         self.min_margin_level = self.config["trading_parameters"]["min_margin_level"]
@@ -8649,7 +8650,21 @@ class TradingSystem:
                 execution_time = (time.time() - attempt_start) * 1000  # Convert to ms
                 
                 if result is None:
-                    self.log(f"❌ Order send returned None (attempt {attempt + 1}) - took {execution_time:.1f}ms", "WARNING")
+                    # Enhanced error handling for None responses
+                    self.log(f"❌ Order send returned None (attempt {attempt + 1}/{max_attempts}) - took {execution_time:.1f}ms", "WARNING")
+                    
+                    # Log additional context for debugging
+                    if detailed_logging:
+                        self.log(f"   Request details: Symbol={request.get('symbol', 'N/A')}, "
+                                f"Volume={request.get('volume', 'N/A')}, "
+                                f"Type={request.get('type', 'N/A')}, "
+                                f"Price={request.get('price', 'N/A')}", "DEBUG")
+                        
+                        # Check MT5 connection status
+                        if not self.check_mt5_connection_health():
+                            self.log("   MT5 connection appears unhealthy", "WARNING")
+                        else:
+                            self.log("   MT5 connection appears healthy - None response likely due to broker rejection", "INFO")
                     
                     if attempt < max_attempts - 1:
                         # Use conservative backoff for None returns
@@ -8663,9 +8678,11 @@ class TradingSystem:
                         delay = min(delay + jitter, max_delay)
                         
                         if detailed_logging:
-                            self.log(f"   Retrying in {delay:.1f}s...", "INFO")
+                            self.log(f"   Retrying in {delay:.1f}s... (attempt {attempt + 2}/{max_attempts})", "INFO")
                         time.sleep(delay)
                         continue
+                    else:
+                        self.log(f"❌ All {max_attempts} attempts failed - order execution aborted", "ERROR")
                     return None
                 
                 # Check for transient errors that can be retried
@@ -8686,6 +8703,17 @@ class TradingSystem:
                     self.log(f"🔄 Transient error: {error_desc} (code: {result.retcode}) - attempt {attempt + 1}, took {execution_time:.1f}ms", "WARNING")
                     
                     if attempt < max_attempts - 1:
+                        # Check connection health only for connection-specific errors
+                        connection_related_errors = [mt5.TRADE_RETCODE_CONNECTION, mt5.TRADE_RETCODE_TIMEOUT, mt5.TRADE_RETCODE_TRADE_TIMEOUT]
+                        if result.retcode in connection_related_errors:
+                            if detailed_logging:
+                                self.log("   Checking connection health due to connection-related error...", "INFO")
+                            if not self.check_mt5_connection_health():
+                                self.log("   ⚠️ Connection health check failed - connection issue detected", "WARNING")
+                            else:
+                                if detailed_logging:
+                                    self.log("   ✅ Connection health check passed", "DEBUG")
+                        
                         # Update price for retry if price-related error
                         if result.retcode in [mt5.TRADE_RETCODE_REQUOTE, mt5.TRADE_RETCODE_PRICE_CHANGED, mt5.TRADE_RETCODE_PRICE_OFF, mt5.TRADE_RETCODE_INVALID_PRICE]:
                             tick = self._get_tick_data_with_retry(request["symbol"])
