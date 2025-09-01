@@ -146,18 +146,15 @@ class TradingSystem:
         self.symbol = "XAUUSD.v"  # เปลี่ยนจาก "XAUUSD" เป็น "XAUUSD.v"
         self.base_lot = 0.01
         self.max_positions = 50
-        self.max_daily_trades = 100
         self.min_margin_level = 200.0
         self.signal_cooldown = 60  # seconds
         self.max_signals_per_hour = 40
         
         # Trading statistics
-        self.daily_trades = 0
         self.total_signals = 0
         self.successful_signals = 0
         self.last_signal_time = None
         self.hourly_signals = []
-        self.last_reset_date = datetime.now().date()  # Track when daily counters were last reset
         
         # Portfolio tracking
         self.positions: List[Position] = []
@@ -1723,45 +1720,9 @@ class TradingSystem:
         except Exception as e:
             return False
 
-    def reset_daily_counters(self):
-        """Reset daily trading counters for a new trading day"""
-        try:
-            old_daily_trades = self.daily_trades
-            old_reset_date = self.last_reset_date
-            self.daily_trades = 0
-            self.last_reset_date = datetime.now().date()
-            
-            self.log(f"🔄 Daily counters reset: {old_daily_trades} → 0 trades (date: {old_reset_date} → {self.last_reset_date})", "INFO")
-            
-        except Exception as e:
-            self.log(f"Error resetting daily counters: {str(e)}", "ERROR")
-
-    def check_and_reset_daily_counters(self):
-        """Check if it's a new day and reset daily counters if needed"""
-        try:
-            current_date = datetime.now().date()
-            
-            # Debug logging for daily counter check
-            self.log(f"🗓️ Daily counter check: current={current_date}, last_reset={self.last_reset_date}, daily_trades={self.daily_trades}", "DEBUG")
-            
-            # If current date is different from last reset date, reset counters
-            if current_date != self.last_reset_date:
-                self.log(f"📅 New day detected, resetting daily counters...", "INFO")
-                self.reset_daily_counters()
-                return True
-            
-            return False
-            
-        except Exception as e:
-            self.log(f"Error checking daily reset: {str(e)}", "ERROR")
-            return False
-
     def can_trade(self) -> bool:
         """Check if trading is allowed based on various conditions"""
         try:
-            # Check and reset daily counters if it's a new day
-            self.check_and_reset_daily_counters()
-            
             # Check basic conditions
             if not self.mt5_connected or not self.trading_active:
                 return False
@@ -1769,11 +1730,6 @@ class TradingSystem:
             # Check position limit
             if len(self.positions) >= self.max_positions:
                 self.log("Max positions reached", "WARNING")
-                return False
-            
-            # Check daily trade limit
-            if self.daily_trades >= self.max_daily_trades:
-                self.log("Daily trade limit reached", "WARNING")
                 return False
             
             # Check signal cooldown
@@ -1931,7 +1887,6 @@ class TradingSystem:
                     if result.retcode == mt5.TRADE_RETCODE_DONE:
                         self.last_signal_time = datetime.now()
                         self.hourly_signals.append(datetime.now())
-                        self.daily_trades += 1
                         self.total_signals += 1
                         
                         self.log(f"✅ Order executed: {signal.direction} {lot_size} lots")
@@ -3079,15 +3034,6 @@ class TradingSystem:
             else:
                 conditions.append(f"✅ Position count OK: {len(self.positions)}/{self.max_positions}")
                 
-            if self.daily_trades >= self.max_daily_trades:
-                conditions.append(f"❌ Daily trade limit: {self.daily_trades}/{self.max_daily_trades}")
-            else:
-                conditions.append(f"✅ Daily trades OK: {self.daily_trades}/{self.max_daily_trades}")
-            
-            # Date tracking debug info
-            current_date = datetime.now().date()
-            conditions.append(f"📅 Last reset: {self.last_reset_date}, Current: {current_date}")
-                
             # Signal cooldown
             if self.last_signal_time:
                 seconds_since = (datetime.now() - self.last_signal_time).seconds
@@ -4175,8 +4121,6 @@ class TradingSystem:
                 "hedge_pairs": self.hedge_pairs if isinstance(self.hedge_pairs, dict) else {},
                 
                 # Statistics (with defaults)
-                "daily_trades": getattr(self, 'daily_trades', 0),
-                "last_reset_date": getattr(self, 'last_reset_date', datetime.now().date()).isoformat(),
                 "total_signals": getattr(self, 'total_signals', 0),
                 "successful_signals": getattr(self, 'successful_signals', 0),
                 "last_signal_time": self.last_signal_time.isoformat() if getattr(self, 'last_signal_time', None) else None,
@@ -4363,19 +4307,6 @@ class TradingSystem:
             self.hedge_pairs = self._validate_dict(state_data.get("hedge_pairs", {}))
             
             # Statistics with validation
-            self.daily_trades = self._validate_int(state_data.get("daily_trades", 0), min_val=0)
-            
-            # Load and validate last_reset_date
-            if state_data.get("last_reset_date"):
-                try:
-                    self.last_reset_date = datetime.fromisoformat(state_data["last_reset_date"]).date()
-                except ValueError as e:
-                    self.log(f"Invalid last_reset_date format: {e}, using current date", "WARNING")
-                    self.last_reset_date = datetime.now().date()
-            else:
-                # Default to current date if not found
-                self.last_reset_date = datetime.now().date()
-            
             self.total_signals = self._validate_int(state_data.get("total_signals", 0), min_val=0)
             self.successful_signals = self._validate_int(state_data.get("successful_signals", 0), min_val=0)
             
@@ -4906,7 +4837,6 @@ class TradingSystem:
             trading_health = {
                 'trading_active': self.trading_active,
                 'active_positions': len(self.positions) if hasattr(self, 'positions') else 0,
-                'daily_trades': self.daily_trades,
                 'success_rate': 0
             }
             
@@ -5042,7 +4972,6 @@ class TradingSystem:
                 'symbol': self.symbol,
                 'base_lot': self.base_lot,
                 'active_positions': len(self.positions) if hasattr(self, 'positions') else 0,
-                'daily_trades': self.daily_trades,
                 'total_signals': self.total_signals,
                 'successful_signals': self.successful_signals,
                 'success_rate': (self.successful_signals / max(1, self.total_signals)) * 100
@@ -6607,16 +6536,6 @@ class TradingGUI:
         self.pnl_value_label = ttk.Label(pnl_frame, text="$0.00", style='Success.TLabel')
         self.pnl_value_label.pack(side='right')
         
-        # Daily trades counter
-        trades_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
-        trades_frame.pack(fill='x', pady=(0, 6))
-        
-        trades_label = ttk.Label(trades_frame, text="📈 Daily Trades:", style='Status.TLabel')
-        trades_label.pack(side='left')
-        
-        self.daily_trades_label = ttk.Label(trades_frame, text="0/100", style='Status.TLabel')
-        self.daily_trades_label.pack(side='right')
-        
         # Active positions count
         positions_frame = tk.Frame(card_content, bg=self.COLORS['bg_secondary'])
         positions_frame.pack(fill='x', pady=(0, 6))
@@ -7578,12 +7497,6 @@ class TradingGUI:
                     self.pnl_value_label.config(text=f"${total_profit:.2f}", style='Success.TLabel')
                 else:
                     self.pnl_value_label.config(text=f"${total_profit:.2f}", style='Error.TLabel')
-            
-            # Update daily trades counter
-            if hasattr(self, 'daily_trades_label'):
-                self.daily_trades_label.config(
-                    text=f"{self.trading_system.daily_trades}/{self.trading_system.max_daily_trades}"
-                )
             
             # Update active positions count
             if hasattr(self, 'active_pos_label'):
