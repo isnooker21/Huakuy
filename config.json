@@ -1,0 +1,78 @@
+{
+  "trading_parameters": {
+    "symbol": "XAUUSD.v",
+    "base_lot_size": 0.01,
+    "max_lot_size": 0.10,
+    "max_positions": 50,
+    "min_margin_level": 200.0,
+    "signal_cooldown": 60,
+    "max_signals_per_hour": 40
+  },
+  "decision_weights": {
+    "safety_check": 0.35,
+    "portfolio_health": 0.25,
+    "zone_distribution": 0.20,
+    "balance_optimization": 0.15,
+    "signal_quality": 0.05
+  },
+  "conflict_resolution": {
+    "safety_vs_opportunity": "safety_always",
+    "portfolio_vs_zone": "adaptive_weighted",
+    "immediate_vs_longterm": "balanced_60_40",
+    "performance_vs_accuracy": "accuracy_first"
+  },
+  "portfolio_management": {
+    "balance_target_ratio": 0.5,
+    "balance_tolerance": 0.15,
+    "redirect_threshold": 0.65,
+    "max_redirect_ratio": 0.4,
+    "profit_harvest_threshold": 50.0,
+    "min_profit_for_redirect_close": 25.0
+  },
+  "zone_based_trading": {
+    "zone_size_pips": 25,
+    "max_positions_per_zone": 3,
+    "min_position_distance_pips": 15,
+    "force_zone_diversification": true,
+    "zone_cache_ttl": 30,
+    "zone_recalc_threshold": 0.1
+  },
+  "lot_sizing": {
+    "lot_multiplier_range": [0.5, 3.0],
+    "equity_based_sizing": true,
+    "signal_strength_multiplier": true,
+    "risk_percent_range": [0.01, 0.03],
+    "stop_loss_pips": 50,
+    "pip_value": 1.0
+  },
+  "risk_management": {
+    "anti_exposure_enabled": true,
+    "max_exposure_distance": 150,
+    "exposure_warning_distance": 100,
+    "auto_hedge_enabled": true,
+    "hedge_trigger_distance": 120,
+    "hedge_coverage_ratio": 1.2
+  },
+  "performance_optimization": {
+    "enable_caching": true,
+    "cache_hot_threshold": 10,
+    "cache_warm_threshold": 60,
+    "max_cache_size": 1000,
+    "cleanup_interval": 300,
+    "performance_monitoring": true
+  },
+  "circuit_breaker": {
+    "enabled": true,
+    "max_connection_failures": 5,
+    "threshold": 3,
+    "timeout": 300,
+    "connection_check_interval": 30
+  },
+  "logging": {
+    "level": "INFO",
+    "decision_logging": true,
+    "performance_logging": true,
+    "file_output": false,
+    "max_log_size": 10485760
+  }
+}

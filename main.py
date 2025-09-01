@@ -181,14 +181,156 @@ class OrderRole(Enum):
 
 class TradingSystem:
     def __init__(self):
+        # Initialize basic components first (needed for logging)
+        self.log_queue = queue.Queue()
         self.mt5_connected = False
         self.trading_active = False
-        self.symbol = "XAUUSD.v"  # เปลี่ยนจาก "XAUUSD" เป็น "XAUUSD.v"
-        self.base_lot = 0.01
-        self.max_positions = 50
-        self.min_margin_level = 200.0
-        self.signal_cooldown = 60  # seconds
-        self.max_signals_per_hour = 40
+        
+        # 🎯 NEW: Initialize Unified System Components
+        try:
+            from config_manager import ConfigurationManager
+            from performance_optimizer import PerformanceOptimizer
+            from unified_decision_engine import UnifiedDecisionEngine
+            
+            self.config_manager = ConfigurationManager()
+            self.performance_optimizer = PerformanceOptimizer(self.config_manager)
+            self.unified_engine = UnifiedDecisionEngine(self.config_manager, self.performance_optimizer)
+            
+            # Load parameters from config instead of hardcoding
+            trading_params = self.config_manager.get_section("trading_parameters")
+            self.symbol = trading_params.get("symbol", "XAUUSD.v")
+            self.base_lot = trading_params.get("base_lot_size", 0.01)
+            self.max_positions = trading_params.get("max_positions", 50)
+            self.min_margin_level = trading_params.get("min_margin_level", 200.0)
+            self.signal_cooldown = trading_params.get("signal_cooldown", 60)
+            self.max_signals_per_hour = trading_params.get("max_signals_per_hour", 40)
+            
+            self.unified_system_enabled = True
+            self.log("🚀 Unified Trading System v3.0 initialized successfully", "INFO")
+            
+        except Exception as e:
+            # Fallback to original hardcoded values
+            self.unified_system_enabled = False
+            self.symbol = "XAUUSD.v"
+            self.base_lot = 0.01
+            self.max_positions = 50
+            self.min_margin_level = 200.0
+            self.signal_cooldown = 60
+            self.max_signals_per_hour = 40
+            self.log(f"⚠️ Unified system initialization failed, using legacy mode: {str(e)}", "WARNING")
+        
+        # Load remaining parameters (config or legacy fallback)
+        if self.unified_system_enabled:
+            self._load_from_config()
+        else:
+            self._load_legacy_defaults()
+        
+        # Common initialization regardless of mode
+        self._initialize_common_components()
+    
+    def _load_from_config(self):
+        """Load parameters from configuration manager"""
+        try:
+            # Portfolio management
+            portfolio_params = self.config_manager.get_section("portfolio_management")
+            self.balance_target_ratio = portfolio_params.get("balance_target_ratio", 0.5)
+            self.balance_tolerance = portfolio_params.get("balance_tolerance", 0.15)
+            self.redirect_threshold = portfolio_params.get("redirect_threshold", 0.65)
+            self.max_redirect_ratio = portfolio_params.get("max_redirect_ratio", 0.4)
+            self.profit_harvest_threshold = portfolio_params.get("profit_harvest_threshold", 50.0)
+            self.min_profit_for_redirect_close = portfolio_params.get("min_profit_for_redirect_close", 25.0)
+            
+            # Zone-based trading
+            zone_params = self.config_manager.get_section("zone_based_trading")
+            self.zone_size_pips = zone_params.get("zone_size_pips", 25)
+            self.max_positions_per_zone = zone_params.get("max_positions_per_zone", 3)
+            self.min_position_distance_pips = zone_params.get("min_position_distance_pips", 15)
+            self.force_zone_diversification = zone_params.get("force_zone_diversification", True)
+            self.zone_cache_ttl = zone_params.get("zone_cache_ttl", 30)
+            self.zone_recalc_threshold = zone_params.get("zone_recalc_threshold", 0.1)
+            
+            # Lot sizing
+            lot_params = self.config_manager.get_section("lot_sizing")
+            self.base_lot_size = lot_params.get("base_lot_size", 0.01)
+            self.max_lot_size = lot_params.get("max_lot_size", 0.10)
+            self.lot_multiplier_range = tuple(lot_params.get("lot_multiplier_range", [0.5, 3.0]))
+            self.equity_based_sizing = lot_params.get("equity_based_sizing", True)
+            self.signal_strength_multiplier = lot_params.get("signal_strength_multiplier", True)
+            
+            # Risk management
+            risk_params = self.config_manager.get_section("risk_management")
+            self.anti_exposure_enabled = risk_params.get("anti_exposure_enabled", True)
+            self.max_exposure_distance = risk_params.get("max_exposure_distance", 150)
+            self.exposure_warning_distance = risk_params.get("exposure_warning_distance", 100)
+            self.auto_hedge_enabled = risk_params.get("auto_hedge_enabled", True)
+            self.hedge_trigger_distance = risk_params.get("hedge_trigger_distance", 120)
+            self.hedge_coverage_ratio = risk_params.get("hedge_coverage_ratio", 1.2)
+            
+            # Circuit breaker
+            circuit_params = self.config_manager.get_section("circuit_breaker")
+            self.circuit_breaker_enabled = circuit_params.get("enabled", True)
+            self.max_connection_failures = circuit_params.get("max_connection_failures", 5)
+            self.circuit_breaker_threshold = circuit_params.get("threshold", 3)
+            self.circuit_breaker_timeout = circuit_params.get("timeout", 300)
+            self.connection_check_interval = circuit_params.get("connection_check_interval", 30)
+            
+            self.log("✅ Configuration loaded from config.json", "INFO")
+            
+        except Exception as e:
+            self.log(f"⚠️ Error loading config, using defaults: {str(e)}", "WARNING")
+            self._load_legacy_defaults()
+    
+    def _load_legacy_defaults(self):
+        """Load legacy hardcoded parameters as fallback"""
+        # Smart Signal Router & Position Management
+        self.balance_target_ratio = 0.5
+        self.balance_tolerance = 0.15
+        self.redirect_threshold = 0.65
+        self.max_redirect_ratio = 0.4
+        
+        # Adaptive profit management
+        self.profit_harvest_threshold = 50.0
+        self.min_profit_for_redirect_close = 25.0
+        
+        # Zone-Based Trading System Configuration
+        self.zone_size_pips = 25
+        self.max_positions_per_zone = 3
+        self.min_position_distance_pips = 15
+        self.force_zone_diversification = True
+        
+        # Dynamic Lot Sizing Configuration
+        self.base_lot_size = 0.01
+        self.max_lot_size = 0.10
+        self.lot_multiplier_range = (0.5, 3.0)
+        self.equity_based_sizing = True
+        self.signal_strength_multiplier = True
+        
+        # Performance Optimization - Zone Analysis Caching
+        self.zone_cache_ttl = 30
+        self.zone_recalc_threshold = 0.1
+        
+        # Anti-Exposure Protection System
+        self.anti_exposure_enabled = True
+        self.max_exposure_distance = 150
+        self.exposure_warning_distance = 100
+        self.auto_hedge_enabled = True
+        self.hedge_trigger_distance = 120
+        self.hedge_coverage_ratio = 1.2
+        
+        # Circuit breaker
+        self.circuit_breaker_enabled = True
+        self.max_connection_failures = 5
+        self.circuit_breaker_threshold = 3
+        self.circuit_breaker_timeout = 300
+        self.connection_check_interval = 30
+    
+    def _initialize_common_components(self):
+        """Initialize components common to both unified and legacy systems"""
+        
+        # GUI components (already initialized above but ensure they exist)
+        if not hasattr(self, 'log_queue'):
+            self.log_queue = queue.Queue()
+        self.root = None
         
         # Trading statistics
         self.total_signals = 0
@@ -202,59 +344,29 @@ class TradingSystem:
         self.sell_volume = 0.0
         self.portfolio_health = 100.0
         
-        # GUI components
-        self.root = None
-        self.log_queue = queue.Queue()
-        
-        # 🧠 Smart Signal Router & Position Management
+        # Smart routing statistics
         self.position_tracker = {}
         self.smart_router_enabled = True
-        self.balance_target_ratio = 0.5
-        self.balance_tolerance = 0.15  # ยอมรับ 35:65 - 65:35
-        self.redirect_threshold = 0.65  # redirect เมื่อ balance เกิน 65:35
-        self.max_redirect_ratio = 0.4   # redirect ได้สูงสุด 40% ของ signals
-        
-        # Adaptive profit management
-        self.profit_harvest_threshold = 50.0
-        self.adaptive_profit_targets = True
-        self.min_profit_for_redirect_close = 25.0
-        self.position_efficiency_check_interval = 30
-        self.last_efficiency_check = None
-        
-        # Smart routing statistics
         self.total_redirects = 0
         self.successful_redirects = 0
         self.redirect_profit_captured = 0.0
         self.last_redirect_time = None
-        self.redirect_cooldown = 30  # วินาที
+        self.redirect_cooldown = 30
         
-        # Position hold scoring
+        # Position management
+        self.adaptive_profit_targets = True
+        self.position_efficiency_check_interval = 30
+        self.last_efficiency_check = None
         self.max_hold_hours = 48
         self.gentle_management = True
-        self.emergency_mode_threshold = 25  # portfolio health
-
-        # 🎯 Zone-Based Trading System Configuration
-        self.zone_size_pips = 25  # ขนาด zone (pips)
-        self.max_positions_per_zone = 3  # จำกัดไม้ต่อ zone
-        self.min_position_distance_pips = 15  # ระยะห่างขั้นต่ำระหว่างไม้
-        self.force_zone_diversification = True  # บังคับกระจาย
+        self.emergency_mode_threshold = 25
         
-        # 📊 Dynamic Lot Sizing Configuration
-        self.base_lot_size = 0.01  # lot พื้นฐาน
-        
-        # 🚀 Performance Optimization - Zone Analysis Caching
+        # Zone analysis caching (legacy)
         self.zone_analysis_cache = None
         self.zone_analysis_cache_time = None
         self.zone_analysis_cache_positions_hash = None
-        self.zone_cache_ttl = 30  # seconds - cache for 30 seconds
-        self.zone_recalc_threshold = 0.1  # recalculate if positions change by 10%
-        self.max_lot_size = 0.10   # lot สูงสุด
-        self.lot_multiplier_range = (0.5, 3.0)  # ช่วงการคูณ lot
-        self.equity_based_sizing = True  # ปรับตาม equity
-        self.signal_strength_multiplier = True  # ปรับตาม signal strength
-
+        
         # Auto-detect filling type
-        self.filling_type = None
         if MT5_AVAILABLE:
             self.filling_types_priority = [
                 mt5.ORDER_FILLING_IOC,  # Immediate or Cancel
@@ -262,29 +374,94 @@ class TradingSystem:
                 mt5.ORDER_FILLING_RETURN  # Return (default)
             ]
         else:
-            # Fallback values when MT5 is not available
             self.filling_types_priority = [0, 1, 2]  # Mock values
         
-        # 🔗 Connection Health Monitoring & Circuit Breakers
+        self.filling_type = None
+        
+        # Connection Health Monitoring
         self.last_mt5_ping = None
         self.connection_failures = 0
-        self.max_connection_failures = 5
-        self.connection_check_interval = 30  # seconds
-        self.circuit_breaker_enabled = True
-        self.circuit_breaker_threshold = 3  # failures before breaking
-        self.circuit_breaker_timeout = 300  # 5 minutes before retry
         self.circuit_breaker_open = False
         self.circuit_breaker_last_failure = None
-
-        # 🖥️ Terminal Selection System
+        
+        # Terminal Selection System
         self.available_terminals = []
         self.selected_terminal = None
         self.terminal_scan_in_progress = False
-
-        # 🛡️ Anti-Exposure Protection System
-        self.anti_exposure_enabled = True
-        self.max_exposure_distance = 150  # pips (1.5 points for XAUUSD)
-        self.exposure_warning_distance = 100  # pips
+        
+        # Support/Resistance Detection
+        self.sr_detection_enabled = True
+        self.sr_lookback_periods = 50
+        self.sr_strength_threshold = 3
+        self.sr_proximity_pips = 20
+        
+        # Auto-Hedge System
+        self.hedge_system_enabled = True
+        self.hedge_calculation_method = "LOSS_COVERAGE"
+        self.min_hedge_volume = 0.01
+        self.max_hedge_volume = 5.0
+        self.hedge_distance_multiplier = 1.5
+        
+        # Advanced Drawdown Management
+        self.drawdown_management_enabled = True
+        self.drawdown_trigger_pips = 150
+        self.critical_drawdown_pips = 250
+        self.emergency_drawdown_pips = 350
+        
+        # Dynamic Hedge Strategy
+        self.hedge_strategy = "SMART_RECOVERY"
+        self.hedge_volume_calculation = "DYNAMIC_RATIO"
+        self.hedge_min_profit_to_close = 0.5
+        self.hedge_recovery_target = 2.0
+        
+        # Multi-Level Hedge System
+        self.max_hedge_levels = 3
+        self.hedge_distance_increment = 50
+        self.hedge_volume_multiplier = 1.3
+        
+        # Hedge Tracking & Analytics
+        self.active_hedges = {}
+        self.hedge_pairs = {}
+        self.hedge_analytics = {
+            'total_hedges_created': 0,
+            'successful_recoveries': 0,
+            'total_recovery_profit': 0.0,
+            'avg_recovery_time_hours': 0.0,
+            'hedge_effectiveness': 0.0,
+            'active_hedge_pairs': 0
+        }
+        
+        # Smart Pair/Group Closing System
+        self.pair_closing_enabled = True
+        self.min_pair_profit_percent = 2.0
+        self.group_closing_enabled = True
+        self.min_group_profit_percent = 3.0
+        self.max_loss_percent = -15.0
+        self.portfolio_recovery_mode = True
+        self.recovery_target_percent = 5.0
+        
+        # Profit targets as percentages
+        self.profit_harvest_threshold_percent = 8.0
+        self.min_profit_for_redirect_close_percent = 3.0
+        self.emergency_profit_threshold_percent = 4.0
+        
+        # Statistics
+        self.total_pair_closes = 0
+        self.successful_pair_closes = 0
+        self.pair_profit_captured = 0.0
+        self.total_group_closes = 0
+        self.group_profit_captured = 0.0
+        
+        # State files
+        self.state_file = "trading_state.json"
+        self.positions_file = "positions_backup.pkl"
+        
+        # Load trading state - with safe loading
+        try:
+            self.load_trading_state()
+            self.log("✅ Trading state loaded successfully", "INFO")
+        except Exception as e:
+            self.log(f"⚠️ Could not load trading state: {str(e)}", "WARNING")
         self.auto_hedge_enabled = True
         self.hedge_trigger_distance = 120  # pips
         
@@ -2133,7 +2310,7 @@ class TradingSystem:
             return False
 
     def execute_order(self, signal: Signal) -> bool:
-        """Execute order with smart routing and comprehensive validation"""
+        """Execute order with unified decision engine or legacy smart routing"""
         try:
             # Input validation
             if not isinstance(signal, Signal):
@@ -2166,11 +2343,94 @@ class TradingSystem:
             if self.circuit_breaker_open:
                 self.log("❌ Circuit breaker is open, cannot execute orders", "WARNING")
                 return False
+            
+            # 🚀 NEW: Use Unified Decision Engine if available
+            if self.unified_system_enabled:
+                return self._execute_with_unified_engine(signal)
+            else:
+                # Fallback to legacy smart router
+                return self._execute_with_legacy_router(signal)
                 
-            # ใช้ Enhanced Smart Signal Router with Zone Analysis
+        except ValidationError as e:
+            self.log(f"Validation error in execute_order: {str(e)}", "ERROR")
+            return False
+        except Exception as e:
+            self.log(f"Error in execute_order: {str(e)}", "ERROR")
+            return False
+    
+    def _execute_with_unified_engine(self, signal: Signal) -> bool:
+        """Execute order using the unified decision engine"""
+        try:
+            # Create trading system state for decision engine
+            state = self._get_trading_system_state()
+            
+            # Process signal through unified engine
+            decision = self.unified_engine.process_signal(signal, state)
+            
+            # Log decision details
+            self.log(f"🎯 Unified Decision: {decision.action.value.upper()}")
+            self.log(f"   💪 Confidence: {decision.confidence:.3f}")
+            self.log(f"   📊 Weighted Score: {decision.weighted_score:.3f}")
+            self.log(f"   ⚡ Execution Time: {decision.execution_time_ms:.2f}ms")
+            self.log(f"   🧠 Reasoning: {decision.reasoning}")
+            
+            # Log detailed scores
+            if decision.safety_score < 0.5:
+                self.log(f"   ⚠️ Safety Score: {decision.safety_score:.3f} (Low)")
+            if decision.portfolio_score < 0.5:
+                self.log(f"   📈 Portfolio Score: {decision.portfolio_score:.3f} (Poor)")
+            if decision.zone_score < 0.5:
+                self.log(f"   🗺️ Zone Score: {decision.zone_score:.3f} (Congested)")
+            
+            # Log conflicts resolved
+            if decision.conflicts_resolved:
+                self.log(f"   ⚖️ Conflicts Resolved: {len(decision.conflicts_resolved)}")
+                for conflict in decision.conflicts_resolved:
+                    self.log(f"      - {conflict.conflict_type.value}: {conflict.chosen_option}")
+            
+            # Execute based on decision
+            if decision.action.value == 'execute':
+                return self._execute_market_order_with_lot(signal, decision.lot_size)
+            elif decision.action.value == 'redirect':
+                if decision.target_position:
+                    success = self.execute_redirect_close(decision.target_position, signal, decision.reasoning)
+                    if success:
+                        self.log(f"🎯 UNIFIED REDIRECT SUCCESS")
+                        return True
+                    else:
+                        self.log("🔄 Redirect failed, executing normal order with unified lot size")
+                        return self._execute_market_order_with_lot(signal, decision.lot_size)
+                else:
+                    self.log("⚠️ Redirect decision without target, executing normally")
+                    return self._execute_market_order_with_lot(signal, decision.lot_size)
+            elif decision.action.value == 'skip':
+                self.log(f"⏭️ UNIFIED SKIP: {decision.reasoning}")
+                return False
+            elif decision.action.value == 'close':
+                if decision.target_position:
+                    return self.close_position(decision.target_position)
+                else:
+                    self.log("⚠️ Close decision without target position")
+                    return False
+            elif decision.action.value == 'hedge':
+                return self._create_hedge_position(signal, decision.lot_size)
+            else:
+                self.log(f"⚠️ Unknown decision action: {decision.action.value}")
+                return False
+                
+        except Exception as e:
+            self.log(f"Error in unified engine execution: {str(e)}", "ERROR")
+            # Fallback to legacy execution
+            self.log("🔄 Falling back to legacy execution")
+            return self._execute_with_legacy_router(signal)
+    
+    def _execute_with_legacy_router(self, signal: Signal) -> bool:
+        """Execute order using legacy smart signal router"""
+        try:
+            # Use legacy Enhanced Smart Signal Router with Zone Analysis
             router_result = self.smart_signal_router(signal)
             
-            # 🎯 Log zone analysis if available
+            # Log zone analysis if available
             if 'zone_analysis' in router_result['details'] and router_result['details']['zone_analysis']:
                 zone_data = router_result['details']['zone_analysis']
                 cache_status = "📋 CACHED" if zone_data.get('cached', False) else "🔄 CALCULATED"
@@ -2185,7 +2445,7 @@ class TradingSystem:
                 return False
             
             elif router_result['action'] == 'redirect':
-                # ดำเนินการ redirect
+                # Execute redirect
                 details = router_result['details']
                 target_position = details['target_position']
                 
@@ -2194,18 +2454,287 @@ class TradingSystem:
                     self.log(f"🎯 REDIRECT SUCCESS: ${details['profit_captured']:.2f} captured")
                     return True
                 else:
-                    # ถ้า redirect ล้มเหลว ให้ execute ปกติ
+                    # If redirect fails, execute normally
                     self.log("🔄 Redirect failed, executing normal order")
             
-            # Execute ปกติ (หรือ fallback จาก redirect ที่ล้มเหลว)
+            # Execute normal order (or fallback from failed redirect)
             return self.execute_normal_order(signal)
             
+        except Exception as e:
+            self.log(f"Error in legacy router execution: {str(e)}", "ERROR")
+            return False
+    
+    def _get_trading_system_state(self) -> Dict[str, Any]:
+        """Get current trading system state for unified decision engine"""
+        try:
+            # Get current margin level
+            margin_level = 200.0  # Default
+            if MT5_AVAILABLE and mt5 and self.mt5_connected:
+                account_info = mt5.account_info()
+                if account_info:
+                    margin_level = account_info.margin_level if account_info.margin_level else 200.0
+            
+            # Create positions hash for caching
+            positions_hash = self._get_positions_hash() if hasattr(self, '_get_positions_hash') else 'default'
+            
+            return {
+                'margin_level': margin_level,
+                'positions': self.positions,
+                'last_signal_time': self.last_signal_time,
+                'hourly_signals': self.hourly_signals,
+                'portfolio_health': self.portfolio_health,
+                'buy_volume': self.buy_volume,
+                'sell_volume': self.sell_volume,
+                'positions_hash': positions_hash,
+                'exposure_distance': getattr(self, 'current_exposure_distance', 0),
+                'market_volatility': getattr(self, 'recent_volatility', 1.0),
+                'total_signals': self.total_signals,
+                'successful_signals': self.successful_signals
+            }
+            
+        except Exception as e:
+            self.log(f"Error getting trading system state: {str(e)}", "ERROR")
+            return {
+                'margin_level': 200.0,
+                'positions': [],
+                'portfolio_health': 100.0,
+                'buy_volume': 0.0,
+                'sell_volume': 0.0,
+                'positions_hash': 'error'
+            }
+    
+    def _execute_market_order_with_lot(self, signal: Signal, lot_size: float) -> bool:
+        """Execute market order with specified lot size"""
+        try:
+            # Validate lot size
+            lot_size = InputValidator.validate_volume(lot_size)
+            
+            # Store original lot calculation for comparison logging
+            if self.unified_system_enabled:
+                legacy_lot = self.calculate_lot_size(signal)
+                if abs(lot_size - legacy_lot) > 0.001:
+                    self.log(f"📊 Lot Size: Unified={lot_size:.3f} vs Legacy={legacy_lot:.3f}")
+            
+            # Update signal with validated lot size (if needed by other methods)
+            if not hasattr(signal, 'lot_size'):
+                signal.lot_size = lot_size
+            
+            # Use existing execute_normal_order logic but with our lot size
+            return self._execute_normal_order_internal(signal, lot_size)
+            
+        except Exception as e:
+            self.log(f"Error executing market order with lot: {str(e)}", "ERROR")
+            return False
+    
+    def _execute_normal_order_internal(self, signal: Signal, lot_size: float) -> bool:
+        """Internal method to execute normal order with given lot size"""
+        try:
+            # Connection validation
+            if not self.mt5_connected:
+                raise ValidationError("MT5 not connected")
+                
+            if self.circuit_breaker_open:
+                raise ValidationError("Circuit breaker is open")
+            
+            # Validate order type
+            if signal.direction not in ['BUY', 'SELL']:
+                raise ValidationError(f"Invalid signal direction: {signal.direction}")
+                
+            order_type = mt5.ORDER_TYPE_BUY if signal.direction == 'BUY' else mt5.ORDER_TYPE_SELL
+            
+            # Ensure we have a valid filling type
+            if self.filling_type is None:
+                self.filling_type = self.detect_broker_filling_type()
+            
+            # Validate symbol
+            symbol_info = mt5.symbol_info(self.symbol)
+            if symbol_info is None:
+                raise ValidationError(f"Symbol {self.symbol} not available")
+            
+            if not symbol_info.visible:
+                self.log(f"Making symbol {self.symbol} visible", "INFO")
+                if not mt5.symbol_select(self.symbol, True):
+                    raise ValidationError(f"Failed to select symbol {self.symbol}")
+            
+            # Continue with the rest of the original execute_normal_order logic
+            # This will call the existing MT5 order placement code
+            return self._place_mt5_order(signal, order_type, lot_size)
+            
         except ValidationError as e:
-            self.log(f"Validation error in execute_order: {str(e)}", "ERROR")
+            self.log(f"Validation error in order execution: {str(e)}", "ERROR")
             return False
         except Exception as e:
-            self.log(f"Error in execute_order: {str(e)}", "ERROR")
+            self.log(f"Error in normal order execution: {str(e)}", "ERROR")
             return False
+    
+    def _place_mt5_order(self, signal: Signal, order_type: int, lot_size: float) -> bool:
+        """Place MT5 order with proper error handling"""
+        try:
+            # This method will contain the actual MT5 order placement logic
+            # For now, delegate to the original execute_normal_order method
+            # We'll modify the original method to accept lot_size parameter
+            
+            # Store the lot size temporarily for the original method to use
+            original_calculate_lot_size = self.calculate_lot_size
+            self.calculate_lot_size = lambda s: lot_size
+            
+            try:
+                result = self.execute_normal_order(signal)
+            finally:
+                # Restore original method
+                self.calculate_lot_size = original_calculate_lot_size
+            
+            return result
+            
+        except Exception as e:
+            self.log(f"Error placing MT5 order: {str(e)}", "ERROR")
+            return False
+    
+    def _create_hedge_position(self, signal: Signal, lot_size: float) -> bool:
+        """Create hedge position (placeholder for future implementation)"""
+        try:
+            # For now, just execute as normal order with opposite direction
+            hedge_signal = Signal(
+                timestamp=signal.timestamp,
+                symbol=signal.symbol,
+                direction='SELL' if signal.direction == 'BUY' else 'BUY',
+                strength=signal.strength,
+                reason=f"Hedge for {signal.reason}",
+                price=signal.price
+            )
+            
+            return self._execute_market_order_with_lot(hedge_signal, lot_size)
+            
+        except Exception as e:
+            self.log(f"Error creating hedge position: {str(e)}", "ERROR")
+            return False
+    
+    def get_unified_system_status(self) -> Dict[str, Any]:
+        """Get comprehensive status of the unified trading system"""
+        try:
+            if not self.unified_system_enabled:
+                return {
+                    "enabled": False,
+                    "reason": "Unified system not initialized"
+                }
+            
+            # Get decision engine statistics
+            decision_stats = self.unified_engine.get_decision_statistics()
+            
+            # Get performance statistics
+            performance_stats = self.performance_optimizer.get_performance_stats()
+            
+            # Get conflict resolver statistics
+            conflict_stats = self.unified_engine.conflict_resolver.get_conflict_statistics()
+            
+            return {
+                "enabled": True,
+                "components": {
+                    "config_manager": True,
+                    "performance_optimizer": True,
+                    "unified_engine": True,
+                    "conflict_resolver": True
+                },
+                "decision_stats": decision_stats,
+                "performance_stats": performance_stats,
+                "conflict_stats": conflict_stats,
+                "cache_enabled": self.performance_optimizer.settings.get("cache_enabled", True)
+            }
+            
+        except Exception as e:
+            return {
+                "enabled": False,
+                "error": str(e)
+            }
+    
+    def switch_to_unified_mode(self) -> bool:
+        """Switch to unified trading mode"""
+        try:
+            if self.unified_system_enabled:
+                self.log("✅ Already in unified mode", "INFO")
+                return True
+            
+            # Try to initialize unified system
+            from config_manager import ConfigurationManager
+            from performance_optimizer import PerformanceOptimizer
+            from unified_decision_engine import UnifiedDecisionEngine
+            
+            self.config_manager = ConfigurationManager()
+            self.performance_optimizer = PerformanceOptimizer(self.config_manager)
+            self.unified_engine = UnifiedDecisionEngine(self.config_manager, self.performance_optimizer)
+            
+            # Reload configuration
+            self._load_from_config()
+            
+            self.unified_system_enabled = True
+            self.log("🚀 Switched to Unified Trading System v3.0", "INFO")
+            return True
+            
+        except Exception as e:
+            self.log(f"❌ Failed to switch to unified mode: {str(e)}", "ERROR")
+            return False
+    
+    def switch_to_legacy_mode(self) -> bool:
+        """Switch to legacy trading mode"""
+        try:
+            self.unified_system_enabled = False
+            self.log("🔄 Switched to Legacy Trading Mode", "INFO")
+            return True
+            
+        except Exception as e:
+            self.log(f"❌ Failed to switch to legacy mode: {str(e)}", "ERROR")
+            return False
+    
+    def optimize_for_trading_session(self):
+        """Optimize system for active trading session"""
+        try:
+            if self.unified_system_enabled:
+                # Optimize unified system
+                self.performance_optimizer.optimize_for_trading_session()
+                self.log("🏎️ Unified system optimized for trading session", "INFO")
+            else:
+                # Optimize legacy system
+                self.log("🏎️ Legacy system optimization applied", "INFO")
+                
+        except Exception as e:
+            self.log(f"⚠️ Error optimizing for trading session: {str(e)}", "WARNING")
+    
+    def get_decision_comparison(self, signal: Signal) -> Dict[str, Any]:
+        """Compare unified vs legacy decision making (for testing/validation)"""
+        try:
+            if not self.unified_system_enabled:
+                return {"error": "Unified system not enabled"}
+            
+            # Get unified decision
+            state = self._get_trading_system_state()
+            unified_decision = self.unified_engine.process_signal(signal, state)
+            
+            # Get legacy decision
+            legacy_result = self.smart_signal_router(signal)
+            legacy_lot = self.calculate_lot_size(signal)
+            
+            return {
+                "unified": {
+                    "action": unified_decision.action.value,
+                    "lot_size": unified_decision.lot_size,
+                    "confidence": unified_decision.confidence,
+                    "weighted_score": unified_decision.weighted_score,
+                    "reasoning": unified_decision.reasoning,
+                    "execution_time_ms": unified_decision.execution_time_ms
+                },
+                "legacy": {
+                    "action": legacy_result['action'],
+                    "lot_size": legacy_lot,
+                    "reasoning": legacy_result['details']['reason']
+                },
+                "comparison": {
+                    "lot_difference": abs(unified_decision.lot_size - legacy_lot),
+                    "action_matches": unified_decision.action.value == legacy_result['action']
+                }
+            }
+            
+        except Exception as e:
+            return {"error": str(e)}
 
     def execute_normal_order(self, signal: Signal) -> bool:
         """Execute normal market order with comprehensive validation"""
